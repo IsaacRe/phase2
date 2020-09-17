@@ -4,3 +4,6 @@
 [submodule "baselines/superposition"]
 	path = baselines/superposition
 	url = https://github.com/briancheung/superposition.git
+[submodule "baselines/supsup"]
+	path = baselines/supsup
+	url = https://github.com/RAIVNLab/supsup.git
