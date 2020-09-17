@@ -1,0 +1,6 @@
+[submodule "baselines/mammoth"]
+	path = baselines/mammoth
+	url = https://github.com/hastings24/mammoth.git
+[submodule "baselines/superposition"]
+	path = baselines/superposition
+	url = https://github.com/briancheung/superposition.git
