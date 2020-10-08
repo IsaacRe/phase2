@@ -49,15 +49,14 @@ class LRMBlockV1(nn.Module):
                             stride=stride, cache_attn=cache_attn)
         self.bn1 = norm_layer(planes)
         self.conv2 = lrm3x3(planes, planes, n_blocks, _block_size_conv3x3(planes, planes, n_blocks),
-                            stride=stride, cache_attn=cache_attn)
+                            cache_attn=cache_attn)
         self.bn2 = norm_layer(planes)
         self.relu = nn.ReLU(inplace=True)
 
         if downsample is not None:
-            self.downsample = nn.Sequential(
+            downsample = nn.Sequential(
                 lrm1x1(downsample[0].in_channels, downsample[0].out_channels, n_blocks,
-                       _block_size_conv3x3(downsample[0].in_channels, downsample[0].out_channels,
-                                        n_blocks),
+                       _block_size_conv3x3(downsample[0].in_channels, downsample[0].out_channels, n_blocks),
                        stride=downsample[0].stride, cache_attn=cache_attn),
                 norm_layer(downsample[0].out_channels)
             )

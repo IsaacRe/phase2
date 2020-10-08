@@ -206,7 +206,6 @@ class LRMConvV1(nn.Module):
         self.avg_entropy = average_entropy
 
     def forward(self, x):
-        h, w = x.shape[2:]
         if self.detach:
             x = x.detach()
         sims = self.key_op(x)  # [batch_size x n_blocks x height x width]
@@ -223,10 +222,12 @@ class LRMConvV1(nn.Module):
         if self.do_cache:
             self.cached_attn = attn.data.cpu()
 
+        h, w = attn.shape[2:]  # output featuremap height and width
         attn = attn[:, :, None].repeat(1, 1, self.block_size, 1, 1).reshape(-1, self.n_blocks * self.block_size, h, w)  # naive
                                     # [batch_size x n_blocks * block_size x height x width]
 
-        out = self.V_op(x) * attn   # [batch_size x n_blocks * block_size x height x width]
+        out = self.V_op(x)
+        out = out * attn   # [batch_size x n_blocks * block_size x height x width]
         out = self.U_op(out)        # [batch_size x out_channels x height x width]
 
         return out
