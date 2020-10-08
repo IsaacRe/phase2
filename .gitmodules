@@ -7,3 +7,6 @@
 [submodule "baselines/supsup"]
 	path = baselines/supsup
 	url = https://github.com/RAIVNLab/supsup.git
+[submodule "experiment_utils"]
+	path = experiment_utils
+	url = https://github.com/IsaacRe/experiment_utils.git
