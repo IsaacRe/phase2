@@ -212,12 +212,18 @@ class ResNet(nn.Module):
         return self._forward_impl(x)
 
 
-def _resnet(arch, block, layers, pretrained, progress, **kwargs):
+def set_classification_layer(model, num_classes=100):
+    model.fc = nn.Linear(model.fc.in_features, num_classes)
+
+
+def _resnet(arch, block, layers, pretrained, progress, num_classes=100, seed=1, **kwargs):
+    torch.manual_seed(seed)
     model = ResNet(block, layers, **kwargs)
     if pretrained:
         state_dict = load_state_dict_from_url(model_urls[arch],
                                               progress=progress)
         model.load_state_dict(state_dict)
+    set_classification_layer(model, num_classes=num_classes)
     return model
 
 
@@ -241,6 +247,3 @@ def resnet34(pretrained=False, progress=True, **kwargs):
     """
     return _resnet('resnet34', BasicBlock, [3, 4, 6, 3], pretrained, progress,
                    **kwargs)
-
-
-build_resnet = _resnet
