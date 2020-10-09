@@ -34,7 +34,7 @@ class LRMBlockV1(nn.Module):
 
     def __init__(self, inplanes, planes, stride=1, downsample=None, groups=1,
                  base_width=64, dilation=1, norm_layer=None,
-                 n_blocks=4, cache_attn=False):
+                 n_blocks=1, cache_attn=False):
         super(LRMBlockV1, self).__init__()
 
         if norm_layer is None:
