@@ -3,7 +3,7 @@ from experiment_utils.dataset import get_dataloader_incr
 
 # Test incremental dataloading
 if __name__ == '__main__':
-    train_loaders, val_loaders = get_dataloader_incr(train=True, val_size=200)
+    train_loaders, val_loaders = get_dataloader_incr(train=True, val_ratio=0.1)
     for train_loader, val_loader in zip(train_loaders, val_loaders):
         for _ in tqdm(train_loader):
             pass
