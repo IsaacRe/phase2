@@ -3,7 +3,16 @@ from experiment_utils.argument_parsing import *
 
 ####    Model Args    ##########################################
 
-class LRMV1Args(NumClass, Seed):
+
+class ResNetArgs(NumClass, Seed):
+    ARGS = {
+        'disable_bn_stats':
+            Argument('--disable-bn-stats', action='store_true',
+                     help='disable the tracking of running statistics by batchnorm layers')
+    }
+
+
+class LRMV1Args(ResNetArgs):
     ARGS = {
         'n_blocks':
             Argument('--n-blocks', type=int, default=1, help='number of low-rank blocks in each mixture'),
@@ -12,6 +21,14 @@ class LRMV1Args(NumClass, Seed):
                      help='scales the computed total-memory-preserving block size for each layer. '
                           'Each layer will have block size = nm / (n + m) / n_blocks * block_size_alpha ,'
                           'where n = output dim, m = input dim')
+    }
+
+
+class AllModelArgs(LRMV1Args):
+    ARGS = {
+        'arch':
+            Argument('--arch', type=str, default='resnet18', choices=['resnet18, lrm_resnet18'],
+                     help='specify model to use')
     }
 
 

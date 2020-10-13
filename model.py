@@ -183,10 +183,13 @@ class LRMResNetV1(ResNet):
         return nn.Sequential(*layers)
 
 
-def build_lrm_resnet(Version, block, layers, num_classes=100, seed=1, **kwargs):
+def _lrm_resnet(Version, block, layers, num_classes=100, seed=1, disable_bn_stats=False, **kwargs):
     torch.manual_seed(seed)
     model = Version(block, layers, **kwargs)
     set_classification_layer(model, num_classes=num_classes)
+
+    if disable_bn_stats:
+        disable_bn_stats_tracking(model)
     return model
 
 
@@ -194,7 +197,13 @@ def lrm_resnet18(**kwargs):
     r"""ResNet-18 model from
     `"Deep Residual Learning for Image Recognition" <https://arxiv.org/pdf/1512.03385.pdf>`_
     """
-    return build_lrm_resnet(LRMResNetV1, LRMBlockV1, [2, 2, 2, 2], **kwargs)
+    return _lrm_resnet(LRMResNetV1, LRMBlockV1, [2, 2, 2, 2], **kwargs)
+
+
+archs = {
+    'resnet18': resnet34,
+    'lrm_resnet18': lrm_resnet18
+}
 
 
 # test model construction

@@ -216,7 +216,14 @@ def set_classification_layer(model, num_classes=100):
     model.fc = nn.Linear(model.fc.in_features, num_classes)
 
 
-def _resnet(arch, block, layers, pretrained, progress, num_classes=100, seed=1, **kwargs):
+def disable_bn_stats_tracking(model):
+    def disable(m):
+        if type(m) == nn.BatchNorm2d:
+            m.track_running_stats = False
+    model.apply(disable)
+
+
+def _resnet(arch, block, layers, pretrained, progress, num_classes=100, seed=1, disable_bn_stats=False, **kwargs):
     torch.manual_seed(seed)
     model = ResNet(block, layers, **kwargs)
     if pretrained:
@@ -224,6 +231,8 @@ def _resnet(arch, block, layers, pretrained, progress, num_classes=100, seed=1, 
                                               progress=progress)
         model.load_state_dict(state_dict)
     set_classification_layer(model, num_classes=num_classes)
+    if disable_bn_stats:
+        disable_bn_stats_tracking(model)
     return model
 
 

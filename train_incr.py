@@ -2,8 +2,8 @@ from os.path import join
 import numpy as np
 from experiment_utils.train_models import get_dataloaders_incr, train, test
 from experiment_utils.argument_parsing import *
-from args import IncrTrainingArgs
-from model import resnet18
+from args import *
+from model import archs
 
 
 def append_to_file(filepath: str, s: str):
@@ -26,7 +26,7 @@ def train_incr(args: IncrTrainingArgs, model, train_loaders, val_loaders, device
 
         args.acc_save_path = append_to_file(acc_save_path, '-exp%d' % (i + 1))
         args.model_save_path = append_to_file(model_save_path, '-exp%d' % (i + 1))
-        train(args, model, train_loader, val_loader, device=device, multihead=args.multihead)
+        train(args, model, train_loader, val_loader, device=device, multihead=args.multihead, fc_only=False)#i > 0)
 
         print('Testing over all %d previously learned tasks...' % (i + 1))
         mean_acc = total_classes = 0
@@ -40,12 +40,14 @@ def train_incr(args: IncrTrainingArgs, model, train_loaders, val_loaders, device
         mean_acc = mean_acc / total_classes
         print("Mean accuracy over all %d previously learned tasks: %.4f" % (i + 1, mean_acc))
 
-        np.savez(join(args.acc_save_dir, args.incr_results_path),
-                 **{str(k+1): np.stack(acc) for k, acc in enumerate(running_test_results[:i+1])})
+        if args.save_acc:
+            np.savez(join(args.acc_save_dir, args.incr_results_path),
+                     **{str(k+1): np.stack(acc) for k, acc in enumerate(running_test_results[:i+1])})
 
 
 if __name__ == '__main__':
-    data_args, train_args = parse_args(IncrDataArgs, IncrTrainingArgs)
+    data_args, train_args, model_args = parse_args(IncrDataArgs, IncrTrainingArgs, AllModelArgs)
     train_loader, val_loader, test_loader = get_dataloaders_incr(data_args, load_test=False)
-    net = resnet18(num_classes=data_args.num_classes, seed=data_args.seed).cuda()
+    net = archs[model_args.arch](num_classes=data_args.num_classes, seed=data_args.seed,
+                                 disable_bn_stats=model_args.disable_bn_stats).cuda()
     train_incr(train_args, net, train_loader, val_loader, device=0)
