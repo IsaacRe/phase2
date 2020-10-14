@@ -201,7 +201,7 @@ def lrm_resnet18(**kwargs):
 
 
 archs = {
-    'resnet18': resnet34,
+    'resnet18': resnet18,
     'lrm_resnet18': lrm_resnet18
 }
 
