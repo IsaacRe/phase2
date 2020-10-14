@@ -28,7 +28,10 @@ class AllModelArgs(LRMV1Args):
     ARGS = {
         'arch':
             Argument('--arch', type=str, default='resnet18', choices=['resnet18, lrm_resnet18'],
-                     help='specify model to use')
+                     help='specify model to use'),
+        'load_state_path':
+            Argument('--load-state-path', type=str, default='',
+                     help='specify path to model state file to load pretrained weights')
     }
 
 

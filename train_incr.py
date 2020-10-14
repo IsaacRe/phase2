@@ -1,5 +1,6 @@
 from os.path import join
 import numpy as np
+import torch
 from experiment_utils.train_models import get_dataloaders_incr, train, test
 from experiment_utils.argument_parsing import *
 from args import *
@@ -49,5 +50,11 @@ if __name__ == '__main__':
     data_args, train_args, model_args = parse_args(IncrDataArgs, IncrTrainingArgs, AllModelArgs)
     train_loader, val_loader, test_loader = get_dataloaders_incr(data_args, load_test=False)
     net = archs[model_args.arch](num_classes=data_args.num_classes, seed=data_args.seed,
-                                 disable_bn_stats=model_args.disable_bn_stats).cuda()
+                                 disable_bn_stats=model_args.disable_bn_stats)
+    # load pretrained feature extractor if specified
+    if model_args.load_state_path:
+        state = torch.load(model_args.load_state_path)
+        state['fc.weight'], state['fc.bias'] = net.fc.weight, net.fc.bias
+        net.load_state_dict(state)
+    net.cuda()
     train_incr(train_args, net, train_loader, val_loader, device=0)
