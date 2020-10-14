@@ -189,8 +189,12 @@ class LRMConvV1(nn.Module):
         return self.key_op.weight.data
 
     @property
-    def hash_vals(self):
-        return self.val_op.weight.data
+    def V(self):
+        return self.V_op.weight.data
+
+    @property
+    def U(self):
+        return self.U_op.weight.data
 
     def cache_attn(self, cache=True):
         self.do_cache = cache
