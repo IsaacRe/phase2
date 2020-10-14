@@ -146,8 +146,10 @@ class LRMResNetV1(nn.Module):
 
     def __init__(self, block, layers, num_classes=100, zero_init_residual=False,
                  groups=1, width_per_group=64, replace_stride_with_dilation=None, norm_layer=None,
-                 n_blocks=1, block_size_alpha=1):
+                 n_blocks=1, block_size_alpha=1, route_by_task=False):
         super(LRMResNetV1, self).__init__()
+        self.task_id = None
+        self.route_by_task = route_by_task
         self.n_blocks = n_blocks
         self.block_size_alpha = block_size_alpha
 
@@ -199,6 +201,13 @@ class LRMResNetV1(nn.Module):
                 elif isinstance(m, BasicBlock):
                     nn.init.constant_(m.bn2.weight, 0)
 
+        def _set_route_by_task(m):
+            if type(m) == LRMConvV1:
+                m.route_by_task = route_by_task
+
+        # set route_by_task for all LRMConv modules
+        self.apply(_set_route_by_task)
+
     def _make_layer(self, block, planes, blocks, stride=1, dilate=False):
         norm_layer = self._norm_layer
         downsample = None
@@ -248,6 +257,17 @@ class LRMResNetV1(nn.Module):
 
     def forward(self, x):
         return self._forward_impl(x)
+
+    def set_task_id(self, task_id):
+        """Set task id for the current task. Used for routing by task"""
+        self.task_id = task_id
+
+        def _set_task_id(m):
+            if type(m) == LRMConvV1:
+                m.task_id = task_id
+
+        # set task_id for all LRMConv modules
+        self.apply(_set_task_id)
 
 
 def _lrm_resnet(Version, block, layers, num_classes=100, seed=1, disable_bn_stats=False, **kwargs):

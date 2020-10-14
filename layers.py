@@ -167,6 +167,8 @@ class LRMConvV1(nn.Module):
     def __init__(self, in_channels, out_channels, kernel_size, n_blocks, block_size,
                  optim='gd', detach=False, cache_attn=False, padding=(1, 1), stride=(1, 1), t=1.0, hard=False):
         super(LRMConvV1, self).__init__()
+        self.route_by_task = False  # set later in model.__init__
+        self.task_id = None
         self.hard = hard
         self.sm_temperature = t
         self.in_channels = in_channels
@@ -209,9 +211,7 @@ class LRMConvV1(nn.Module):
         average_entropy = -(x * torch.log(x)).sum(dim=1).mean()
         self.avg_entropy = average_entropy
 
-    def forward(self, x):
-        if self.detach:
-            x = x.detach()
+    def _forward_attn(self, x):
         sims = self.key_op(x)  # [batch_size x n_blocks x height x width]
 
         # if hard is true and we are evaluating, compute hard max operation instead of softmax
@@ -221,16 +221,31 @@ class LRMConvV1(nn.Module):
         else:
             attn = self.softmax(sims / self.sm_temperature)
 
-        self.compute_attn_entropy(attn)
+        return attn
 
-        if self.do_cache:
-            self.cached_attn = attn.data.cpu()
-
-        h, w = attn.shape[2:]  # output featuremap height and width
-        attn = attn[:, :, None].repeat(1, 1, self.block_size, 1, 1).reshape(-1, self.n_blocks * self.block_size, h, w)  # naive
-                                    # [batch_size x n_blocks * block_size x height x width]
+    def forward(self, x):
+        if self.detach:
+            x = x.detach()
 
         out = self.V_op(x)
+
+        if self.route_by_task:
+            assert self.task_id is not None, 'routing by task but task_id has not been set'
+            assert 0 <= self.task_id < self.n_blocks, 'attempted to route by invalid task_id %d' % self.task_id
+            attn = torch.zeros_like(out).to(out.device)
+            attn[:, self.task_id * self.block_size:(self.task_id + 1) * self.block_size, :, :] = 1.0
+        else:
+            attn = self._forward_attn(x)
+
+            self.compute_attn_entropy(attn)
+
+            if self.do_cache:
+                self.cached_attn = attn.data.cpu()
+
+            h, w = attn.shape[2:]  # output featuremap height and width
+            attn = attn[:, :, None].repeat(1, 1, self.block_size, 1, 1).reshape(-1, self.n_blocks * self.block_size, h, w)  # naive
+                                        # [batch_size x n_blocks * block_size x height x width]
+
         out = out * attn   # [batch_size x n_blocks * block_size x height x width]
         out = self.U_op(out)        # [batch_size x out_channels x height x width]
 

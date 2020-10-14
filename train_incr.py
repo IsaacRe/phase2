@@ -4,13 +4,18 @@ import torch
 from experiment_utils.train_models import get_dataloaders_incr, train, test
 from experiment_utils.argument_parsing import *
 from args import *
-from model import archs
+from model import resnet18, lrm_resnet18
 
 
 def append_to_file(filepath: str, s: str):
     split = filepath.split('.')
     split1 = '.'.join(split[:-1])
     return '.'.join([split1 + s, split[-1]])
+
+
+def set_task(model, task_id):
+    if hasattr(model, 'set_task_id'):
+        model.set_task_id(task_id)
 
 
 def train_incr(args: IncrTrainingArgs, model, train_loaders, val_loaders, device=0):
@@ -24,6 +29,7 @@ def train_incr(args: IncrTrainingArgs, model, train_loaders, val_loaders, device
         # update active (used) model outputs
         # TODO generalize for exposure repetition
         model.active_outputs += train_loader.classes
+        set_task(model, i)
 
         args.acc_save_path = append_to_file(acc_save_path, '-exp%d' % (i + 1))
         args.model_save_path = append_to_file(model_save_path, '-exp%d' % (i + 1))
@@ -33,6 +39,8 @@ def train_incr(args: IncrTrainingArgs, model, train_loaders, val_loaders, device
         mean_acc = total_classes = 0
         model.eval()
         for j, test_loader in enumerate(val_loaders[:i+1]):
+            set_task(model, j)
+
             correct, total = test(model, test_loader, device=device, multihead=args.multihead)
             accuracy = correct / total * 100.
             running_test_results[j] += [accuracy]
@@ -49,8 +57,13 @@ def train_incr(args: IncrTrainingArgs, model, train_loaders, val_loaders, device
 if __name__ == '__main__':
     data_args, train_args, model_args = parse_args(IncrDataArgs, IncrTrainingArgs, AllModelArgs)
     train_loader, val_loader, test_loader = get_dataloaders_incr(data_args, load_test=False)
-    net = archs[model_args.arch](num_classes=data_args.num_classes, seed=data_args.seed,
-                                 disable_bn_stats=model_args.disable_bn_stats)
+    if model_args.arch == 'resnet18':
+        net = resnet18(num_classes=data_args.num_classes, seed=data_args.seed,
+                       disable_bn_stats=model_args.disable_bn_stats)
+    elif model_args.arch == 'lrm_resnet18':
+        net = lrm_resnet18(num_classes=data_args.num_classes, seed=data_args.seed,
+                           disable_bn_stats=model_args.disable_bn_stats, n_blocks=model_args.n_blocks,
+                           block_size_alpha=model_args.block_size_alpha, route_by_task=model_args.route_by_task)
     # load pretrained feature extractor if specified
     if model_args.load_state_path:
         state = torch.load(model_args.load_state_path)

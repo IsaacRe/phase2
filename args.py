@@ -20,14 +20,17 @@ class LRMV1Args(ResNetArgs):
             Argument('--block-size-alpha', type=float, default=1.0,
                      help='scales the computed total-memory-preserving block size for each layer. '
                           'Each layer will have block size = nm / (n + m) / n_blocks * block_size_alpha ,'
-                          'where n = output dim, m = input dim')
+                          'where n = output dim, m = input dim'),
+        'route_by_task':
+            Argument('--route-by-task', action='store_true',
+                     help='allocate separate blocks for each task and route accordingly')
     }
 
 
 class AllModelArgs(LRMV1Args):
     ARGS = {
         'arch':
-            Argument('--arch', type=str, default='resnet18', choices=['resnet18, lrm_resnet18'],
+            Argument('--arch', type=str, default='resnet18', choices=['resnet18', 'lrm_resnet18'],
                      help='specify model to use'),
         'load_state_path':
             Argument('--load-state-path', type=str, default='',
