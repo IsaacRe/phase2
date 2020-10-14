@@ -26,6 +26,11 @@ def train_incr(args: IncrTrainingArgs, model, train_loaders, val_loaders, device
     model.active_outputs = []
 
     for i, (train_loader, val_loader) in enumerate(zip(train_loaders, val_loaders)):
+        if args.exposure_reinit:
+            init_state = torch.load(join(args.model_save_dir, append_to_file(model_save_path, 'init')))
+            model.cpu().load_state_dict(init_state)
+            model.cuda()
+
         # update active (used) model outputs
         # TODO generalize for exposure repetition
         model.active_outputs += train_loader.classes
@@ -69,5 +74,9 @@ if __name__ == '__main__':
         state = torch.load(model_args.load_state_path)
         state['fc.weight'], state['fc.bias'] = net.fc.weight, net.fc.bias
         net.load_state_dict(state)
+    # save state initialization if we will be reinitializing the model before each new exposure
+    if train_args.exposure_reinit:
+        torch.save(net.state_dict(), join(train_args.model_save_dir,
+                                          append_to_file(train_args.model_save_path, 'init')))
     net.cuda()
     train_incr(train_args, net, train_loader, val_loader, device=0)

@@ -44,6 +44,8 @@ class IncrTrainingArgs(TrainingArgs):
     ARGS = {
         'num_repetitions':
             Argument('--num-repetitions', type=int, default=1, help='number of passes to take over all exposures'),
+        'exposure_reinit':
+            Argument('--exposure-reinit', action='store_true', help='reinitialize model before each exposure'),
         'multihead':
             Argument('--multihead', action='store_true', help='use separate classification heads for each exposure'),
         'incr_results_path':
