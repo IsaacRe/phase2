@@ -152,6 +152,8 @@ class LRMResNetV1(nn.Module):
         self.route_by_task = route_by_task
         self.n_blocks = n_blocks
         self.block_size_alpha = block_size_alpha
+        self.param_n_blocks = nn.Parameter(torch.LongTensor([n_blocks]), requires_grad=False)
+        self.param_block_size_alpha = nn.Parameter(torch.FloatTensor([block_size_alpha]), requires_grad=False)
 
         if norm_layer is None:
             norm_layer = nn.BatchNorm2d
@@ -268,6 +270,14 @@ class LRMResNetV1(nn.Module):
 
         # set task_id for all LRMConv modules
         self.apply(_set_task_id)
+
+    def restructure_blocks(self, n_blocks, block_size_alpha):
+        def restructure_lrm_conv(m):
+            if type(m) == LRMConvV1:
+                block_size = _block_size_conv(m.in_channels, m.out_channels, *m.kernel_size, n_blocks, block_size_alpha)
+                m.restructure_blocks(n_blocks, block_size)
+
+        self.apply(restructure_lrm_conv)
 
 
 def _lrm_resnet(Version, block, layers, num_classes=100, seed=1, disable_bn_stats=False, **kwargs):

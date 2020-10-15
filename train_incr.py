@@ -59,21 +59,50 @@ def train_incr(args: IncrTrainingArgs, model, train_loaders, val_loaders, device
                      **{str(k+1): np.stack(acc) for k, acc in enumerate(running_test_results[:i+1])})
 
 
+def load_lrm(state=None, n_blocks=1, block_size_alpha=1.0, **kwargs):
+    if state is not None:
+        n_blocks_new, block_size_alpha_new = n_blocks, block_size_alpha
+        # get n_blocks and block_size_alpha
+        try:
+            n_blocks, block_size_alpha = state['param_n_blocks'], state['param_block_size_alpha']
+        except KeyError:  # for compatibility with previously saved states
+            n_blocks = state['conv1.key_op.weight'].shape[0]
+            block_size_alpha = 1.0
+            state['param_n_blocks'] = torch.nn.Parameter(torch.LongTensor([n_blocks]), requires_grad=False)
+            state['param_block_size_alpha'] = torch.nn.Parameter(torch.FloatTensor([block_size_alpha]),
+                                                                 requires_grad=False)
+
+    lrm_model = lrm_resnet18(n_blocks=n_blocks, block_size_alpha=block_size_alpha, **kwargs)
+
+    if state is not None:
+        state['fc.weight'], state['fc.bias'] = lrm_model.fc.weight, lrm_model.fc.bias
+        lrm_model.load_state_dict(state)
+        if n_blocks != n_blocks_new or block_size_alpha != block_size_alpha_new:
+            lrm_model.restructure_blocks(n_blocks_new, block_size_alpha_new)
+
+    return lrm_model
+
+
 if __name__ == '__main__':
     data_args, train_args, model_args = parse_args(IncrDataArgs, IncrTrainingArgs, AllModelArgs)
     train_loader, val_loader, test_loader = get_dataloaders_incr(data_args, load_test=False)
-    if model_args.arch == 'resnet18':
-        net = resnet18(num_classes=data_args.num_classes, seed=data_args.seed,
-                       disable_bn_stats=model_args.disable_bn_stats)
-    elif model_args.arch == 'lrm_resnet18':
-        net = lrm_resnet18(num_classes=data_args.num_classes, seed=data_args.seed,
-                           disable_bn_stats=model_args.disable_bn_stats, n_blocks=model_args.n_blocks,
-                           block_size_alpha=model_args.block_size_alpha, route_by_task=model_args.route_by_task)
+
+    state = None
     # load pretrained feature extractor if specified
     if model_args.load_state_path:
         state = torch.load(model_args.load_state_path)
-        state['fc.weight'], state['fc.bias'] = net.fc.weight, net.fc.bias
-        net.load_state_dict(state)
+
+    if model_args.arch == 'resnet18':
+        net = resnet18(num_classes=data_args.num_classes, seed=data_args.seed,
+                       disable_bn_stats=model_args.disable_bn_stats)
+        if state is not None:
+            state['fc.weight'], state['fc.bias'] = net.fc.weight, net.fc.bias
+            net.load_state_dict(state)
+    elif model_args.arch == 'lrm_resnet18':
+        net = load_lrm(state=state, num_classes=data_args.num_classes, seed=data_args.seed,
+                       disable_bn_stats=model_args.disable_bn_stats, n_blocks=model_args.n_blocks,
+                       block_size_alpha=model_args.block_size_alpha, route_by_task=model_args.route_by_task)
+
     # save state initialization if we will be reinitializing the model before each new exposure
     if train_args.exposure_reinit:
         torch.save(net.state_dict(), join(train_args.model_save_dir,

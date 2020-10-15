@@ -186,6 +186,10 @@ class LRMConvV1(nn.Module):
                               padding=padding, stride=stride, bias=False)
         self.U_op = nn.Conv2d(n_blocks * block_size, out_channels, (1, 1), bias=False)
 
+        self.kernel_size = self.key_op.kernel_size
+        self.padding = self.key_op.padding
+        self.stride = self.key_op.stride
+
     @property
     def hash_keys(self):
         return self.key_op.weight.data
@@ -250,6 +254,38 @@ class LRMConvV1(nn.Module):
         out = self.U_op(out)        # [batch_size x out_channels x height x width]
 
         return out
+
+    def restructure_blocks(self, n_blocks, block_size):
+        """
+        Restructure blocks to match the new block size
+        Currently only supports restructuring from M into N blocks where N % M == 0
+        """
+        assert n_blocks % self.n_blocks == 0, "invalid n_blocks for restructuring"
+        new_blocks_per_block = n_blocks // self.n_blocks
+        in_channels, out_channels, kernel_size, padding, stride = self.in_channels, self.out_channels, \
+                                                                  self.kernel_size, self.padding, self.stride
+
+        transfer_block_size = min(block_size * new_blocks_per_block, self.block_size)
+
+        key_op = nn.Conv2d(in_channels, n_blocks, kernel_size, padding=padding, stride=stride, bias=False)
+        V_op = nn.Conv2d(in_channels, n_blocks * block_size, kernel_size, padding=padding, stride=stride, bias=False)
+        U_op = nn.Conv2d(n_blocks * block_size, out_channels, (1, 1), bias=False)
+
+        U, V = U_op.weight.data, V_op.weight.data
+
+        # TODO make more efficient
+        for i in range(self.n_blocks):
+            start_idx, start_idx_old = i * block_size * new_blocks_per_block, i * self.block_size
+            V[start_idx:start_idx + transfer_block_size, :, :, :] = \
+                self.V[start_idx_old:start_idx_old + transfer_block_size, :, :, :]
+            U[:, start_idx:start_idx + transfer_block_size, :, :] = \
+                self.U[:, start_idx_old:start_idx_old + transfer_block_size, :, :]
+
+        self.key_op = key_op
+        self.V_op = V_op
+        self.U_op = U_op
+
+        self.n_blocks, self.block_size = n_blocks, block_size
 
 
 # Modified BasicBlock used by ResNet18 - https://github.com/pytorch/vision/blob/master/torchvision/models/resnet.py
