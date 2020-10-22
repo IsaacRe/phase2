@@ -83,7 +83,7 @@ def load_lrm(state=None, n_blocks=1, block_size_alpha=1.0, **kwargs):
     return lrm_model
 
 
-if __name__ == '__main__':
+def main():
     data_args, train_args, model_args = parse_args(IncrDataArgs, IncrTrainingArgs, AllModelArgs)
     if train_args.batch and not train_args.multihead:
         train_loader, val_loader, test_loader = get_dataloaders(data_args, load_test=False)
@@ -121,3 +121,7 @@ if __name__ == '__main__':
             train(train_args, net, train_loader, val_loader, device=0, multihead=False)
     else:
         train_incr(train_args, net, train_loader, val_loader, device=0)
+
+
+if __name__ == '__main__':
+    main()
