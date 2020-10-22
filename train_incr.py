@@ -1,7 +1,7 @@
 from os.path import join
 import numpy as np
 import torch
-from experiment_utils.train_models import get_dataloaders_incr, train, test
+from experiment_utils.train_models import get_dataloaders, get_dataloaders_incr, train, test, train_batch_multihead
 from experiment_utils.argument_parsing import *
 from args import *
 from model import resnet18, lrm_resnet18
@@ -85,7 +85,11 @@ def load_lrm(state=None, n_blocks=1, block_size_alpha=1.0, **kwargs):
 
 if __name__ == '__main__':
     data_args, train_args, model_args = parse_args(IncrDataArgs, IncrTrainingArgs, AllModelArgs)
-    train_loader, val_loader, test_loader = get_dataloaders_incr(data_args, load_test=False)
+    if train_args.batch and not train_args.multihead:
+        train_loader, val_loader, test_loader = get_dataloaders(data_args, load_test=False)
+    else:
+        train_loader, val_loader, test_loader = get_dataloaders_incr(data_args, load_test=False,
+                                                                     multihead_batch=train_args.batch)
 
     state = None
     # load pretrained feature extractor if specified
@@ -108,4 +112,12 @@ if __name__ == '__main__':
         torch.save(net.state_dict(), join(train_args.model_save_dir,
                                           append_to_file(train_args.model_save_path, 'init')))
     net.cuda()
-    train_incr(train_args, net, train_loader, val_loader, device=0)
+
+    if train_args.batch:
+        if train_args.multihead:
+            # trains model on batches of data across tasks while enforcing classification predictions to be within task
+            train_batch_multihead(train_args, net, train_loader, val_loader, device=0)
+        else:
+            train(train_args, net, train_loader, val_loader, device=0, multihead=False)
+    else:
+        train_incr(train_args, net, train_loader, val_loader, device=0)

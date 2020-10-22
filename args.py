@@ -50,5 +50,7 @@ class IncrTrainingArgs(TrainingArgs):
             Argument('--multihead', action='store_true', help='use separate classification heads for each exposure'),
         'incr_results_path':
             Argument('--incr-results-path', type=str, default='incr-accuracy.npz',
-                     help='save path for accuracy over all incremental exposures as learning progresses')
+                     help='save path for accuracy over all incremental exposures as learning progresses'),
+        'batch':
+            Argument('--train-batch', action='store_true', help='run batch training')
     }
