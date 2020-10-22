@@ -1,3 +1,4 @@
+import numpy as np
 import torch.nn as nn
 import torch
 
@@ -165,7 +166,7 @@ class LRMLinearV1(nn.Linear):
 
 class LRMConvV1(nn.Module):
     def __init__(self, in_channels, out_channels, kernel_size, n_blocks, block_size,
-                 optim='gd', detach=False, cache_attn=False, padding=(1, 1), stride=(1, 1), t=1.0, hard=False):
+                 optim='gd', detach=False, cache_attn=True, padding=(1, 1), stride=(1, 1), t=1.0, hard=False):
         super(LRMConvV1, self).__init__()
         self.route_by_task = False  # set later in model.__init__
         self.task_id = None
@@ -212,11 +213,16 @@ class LRMConvV1(nn.Module):
         self.sm_temperature *= (1 - decay)
 
     def compute_attn_entropy(self, x):
-        average_entropy = -(x * torch.log(x)).sum(dim=1).mean()
-        self.avg_entropy = average_entropy
+        with torch.no_grad():
+            entropy = -(x * torch.log(x)).sum(dim=1).flatten().data.cpu()
+            average_entropy = entropy[~np.isnan(entropy).type(torch.bool)].mean()
+            self.avg_entropy = average_entropy.item()
 
     def _forward_attn(self, x):
         sims = self.key_op(x)  # [batch_size x n_blocks x height x width]
+
+        if self.do_cache:
+            self.cached_attn = sims.data.cpu()
 
         # if hard is true and we are evaluating, compute hard max operation instead of softmax
         if (not self.training) and self.hard:
@@ -242,9 +248,6 @@ class LRMConvV1(nn.Module):
             attn = self._forward_attn(x)
 
             self.compute_attn_entropy(attn)
-
-            if self.do_cache:
-                self.cached_attn = attn.data.cpu()
 
             h, w = attn.shape[2:]  # output featuremap height and width
             attn = attn[:, :, None].repeat(1, 1, self.block_size, 1, 1).reshape(-1, self.n_blocks * self.block_size, h, w)  # naive

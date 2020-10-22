@@ -1,4 +1,5 @@
 import torch.nn as nn
+import torch.nn.functional as F
 from layers import *
 from resnet import *
 
@@ -17,13 +18,13 @@ def _block_size_conv3x3(in_ch, out_ch, n_blocks, alpha=1.0):
     return _block_size_conv(in_ch, out_ch, 3, 3, n_blocks, alpha=alpha)
 
 
-def lrm3x3(in_planes, out_planes, n_blocks, block_size, stride=1, cache_attn=False):
+def lrm3x3(in_planes, out_planes, n_blocks, block_size, stride=1, cache_attn=True):
     """3x3 low-rank mixture convolution with padding"""
     return LRMConvV1(in_planes, out_planes, 3, n_blocks, block_size,
                      stride=stride, padding=1, cache_attn=cache_attn)
 
 
-def lrm1x1(in_planes, out_planes, n_blocks, block_size, stride=1, cache_attn=False):
+def lrm1x1(in_planes, out_planes, n_blocks, block_size, stride=1, cache_attn=True):
     """1x1 low-rank mixture convolution with padding"""
     return LRMConvV1(in_planes, out_planes, 1, n_blocks, block_size,
                      stride=stride, padding=0, cache_attn=cache_attn)
@@ -35,7 +36,7 @@ class LRMBlockV1(nn.Module):
 
     def __init__(self, inplanes, planes, stride=1, downsample=None, groups=1,
                  base_width=64, dilation=1, norm_layer=None,
-                 n_blocks=1, block_size_alpha=1.0, cache_attn=False):
+                 n_blocks=1, block_size_alpha=1.0, cache_attn=True):
         super(LRMBlockV1, self).__init__()
 
         if norm_layer is None:
@@ -210,6 +211,10 @@ class LRMResNetV1(nn.Module):
         # set route_by_task for all LRMConv modules
         self.apply(_set_route_by_task)
 
+        # running statistics
+        self.running_entropy = {n: [] for n, m in self.named_modules() if type(m) == LRMConvV1}
+        self.running_cls_route_div = {n: [] for n, m in self.named_modules() if type(m) == LRMConvV1}
+
     def _make_layer(self, block, planes, blocks, stride=1, dilate=False):
         norm_layer = self._norm_layer
         downsample = None
@@ -251,6 +256,12 @@ class LRMResNetV1(nn.Module):
         x = self.layer3(x)
         x = self.layer4(x)
 
+        # accumulate LRM stats
+        if not self.route_by_task:
+            self.accumulate_entropy()
+            if self.task_id is not None:
+                self.accumulate_class_routing_divergence()
+
         x = self.avgpool(x)
         x = torch.flatten(x, 1)
         x = self.fc(x)
@@ -278,6 +289,44 @@ class LRMResNetV1(nn.Module):
                 m.restructure_blocks(n_blocks, block_size)
 
         self.apply(restructure_lrm_conv)
+
+    def get_sims(self):
+        sims = {}
+        for n, m in self.named_modules():
+            if type(m) == LRMConvV1:
+                sims[n] = m.cached_attn
+        return sims
+
+    def accumulate_entropy(self):
+        for n, m in self.named_modules():
+            if type(m) == LRMConvV1:
+                self.running_entropy[n] += [m.avg_entropy]
+
+    def reset_entropy(self):
+        self.running_entropy = {n: [] for n, m in self.named_modules() if type(m) == LRMConvV1}
+
+    def get_entropy(self):
+        return self.running_entropy
+
+    def accumulate_class_routing_divergence(self, task_id=None):
+        if task_id is None:
+            task_id = self.task_id
+        assert task_id is not None, 'task id is not set'
+        for n, m in self.named_modules():
+            if type(m) == LRMConvV1 and m.cached_attn is not None:
+                sims = m.cached_attn.transpose(1, 3).reshape(-1, self.n_blocks)
+                dim1 = sims.shape[0]
+                self.running_cls_route_div[n] += [F.cross_entropy(sims, torch.LongTensor([task_id] * dim1)).item()]
+
+    def reset_class_routing_divergence(self):
+        self.running_cls_route_div = {n: [] for n, m in self.named_modules() if type(m) == LRMConvV1}
+
+    def get_class_routing_divergence(self):
+        return self.running_cls_route_div
+
+    def reset_running_stats(self):
+        self.reset_entropy()
+        self.reset_class_routing_divergence()
 
 
 def _lrm_resnet(Version, block, layers, num_classes=100, seed=1, disable_bn_stats=False, **kwargs):

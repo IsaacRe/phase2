@@ -56,6 +56,8 @@ def train_incr(args: IncrTrainingArgs, model, train_loaders, val_loaders, device
 
         if args.save_acc:
             np.savez(join(args.acc_save_dir, args.incr_results_path),
+                     entropy=model.get_entropy(),
+                     class_div=model.get_class_routing_divergence(),
                      **{str(k+1): np.stack(acc) for k, acc in enumerate(running_test_results[:i+1])})
 
 
