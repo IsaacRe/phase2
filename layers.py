@@ -290,6 +290,14 @@ class LRMConvV1(nn.Module):
 
         self.n_blocks, self.block_size = n_blocks, block_size
 
+    def disable_block_grad(self):
+        self.U_op.weight.requires_grad = False
+        self.V_op.weight.requires_grad = False
+
+    def enable_block_grad(self):
+        self.U_op.weight.requires_grad = True
+        self.V_op.weight.requires_grad = True
+
 
 # Modified BasicBlock used by ResNet18 - https://github.com/pytorch/vision/blob/master/torchvision/models/resnet.py
 class InjectBlock(nn.Module):

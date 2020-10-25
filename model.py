@@ -147,7 +147,7 @@ class LRMResNetV1(nn.Module):
 
     def __init__(self, block, layers, num_classes=100, zero_init_residual=False,
                  groups=1, width_per_group=64, replace_stride_with_dilation=None, norm_layer=None,
-                 n_blocks=1, block_size_alpha=1, route_by_task=False):
+                 n_blocks=1, block_size_alpha=1, route_by_task=False, fit_keys=False):
         super(LRMResNetV1, self).__init__()
         self.task_id = None
         self.route_by_task = route_by_task
@@ -214,6 +214,10 @@ class LRMResNetV1(nn.Module):
         # running statistics
         self.running_entropy = {n: [] for n, m in self.named_modules() if type(m) == LRMConvV1}
         self.running_cls_route_div = {n: [] for n, m in self.named_modules() if type(m) == LRMConvV1}
+
+        # disable grad on LRM block factors if we are only fitting keys
+        if fit_keys:
+            self.disable_block_grad()
 
     def _make_layer(self, block, planes, blocks, stride=1, dilate=False):
         norm_layer = self._norm_layer
@@ -327,6 +331,18 @@ class LRMResNetV1(nn.Module):
     def reset_running_stats(self):
         self.reset_entropy()
         self.reset_class_routing_divergence()
+
+    def disable_block_grad(self):
+        def _disable_block_grad(m):
+            if type(m) == LRMConvV1:
+                m.disable_block_grad()
+        self.apply(_disable_block_grad)
+
+    def enable_block_grad(self):
+        def _enable_block_grad(m):
+            if type(m) == LRMConvV1:
+                m.enable_block_grad()
+        self.apply(_enable_block_grad)
 
 
 def _lrm_resnet(Version, block, layers, num_classes=100, seed=1, disable_bn_stats=False, **kwargs):

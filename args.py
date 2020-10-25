@@ -52,5 +52,8 @@ class IncrTrainingArgs(TrainingArgs):
             Argument('--incr-results-path', type=str, default='incr-accuracy.npz',
                      help='save path for accuracy over all incremental exposures as learning progresses'),
         'batch':
-            Argument('--train-batch', action='store_true', help='run batch training')
+            Argument('--train-batch', action='store_true', help='run batch training'),
+        'fit_keys':
+            Argument('--fit-keys', action='store_true',
+                     help='fit only the key operations (and classification layer) of the LRM model')
     }

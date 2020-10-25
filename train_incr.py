@@ -107,7 +107,8 @@ def main():
     elif model_args.arch == 'lrm_resnet18':
         net = load_lrm(state=state, num_classes=data_args.num_classes, seed=data_args.seed,
                        disable_bn_stats=model_args.disable_bn_stats, n_blocks=model_args.n_blocks,
-                       block_size_alpha=model_args.block_size_alpha, route_by_task=model_args.route_by_task)
+                       block_size_alpha=model_args.block_size_alpha, route_by_task=model_args.route_by_task,
+                       fit_keys=train_args.fit_keys)
 
     # save state initialization if we will be reinitializing the model before each new exposure
     if train_args.exposure_reinit:
@@ -119,6 +120,9 @@ def main():
         if train_args.multihead:
             # trains model on batches of data across tasks while enforcing classification predictions to be within task
             train_batch_multihead(train_args, net, train_loader, val_loader, device=0)
+            np.savez(join(train_args.acc_save_dir, train_args.incr_results_path),
+                     entropy=net.get_entropy(),
+                     class_div=net.get_class_routing_divergence())
         else:
             train(train_args, net, train_loader, val_loader, device=0, multihead=False)
     else:
