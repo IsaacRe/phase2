@@ -4,7 +4,7 @@ import torch
 from experiment_utils.train_models import get_dataloaders, get_dataloaders_incr, train, test, train_batch_multihead
 from experiment_utils.argument_parsing import *
 from args import *
-from model import resnet18, lrm_resnet18
+from model import resnet18, lrm_resnet18, LRMResNetV1
 
 
 def append_to_file(filepath: str, s: str):
@@ -55,9 +55,13 @@ def train_incr(args: IncrTrainingArgs, model, train_loaders, val_loaders, device
         print("Mean accuracy over all %d previously learned tasks: %.4f" % (i + 1, mean_acc))
 
         if args.save_acc:
+            entropy = class_div = None
+            if type(model) == LRMResNetV1:
+                entropy = model.get_entropy()
+                class_div = model.get_class_routing_divergence()
             np.savez(join(args.acc_save_dir, args.incr_results_path),
-                     entropy=model.get_entropy(),
-                     class_div=model.get_class_routing_divergence(),
+                     entropy=entropy,
+                     class_div=class_div,
                      **{str(k+1): np.stack(acc) for k, acc in enumerate(running_test_results[:i+1])})
 
 
