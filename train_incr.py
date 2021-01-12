@@ -4,7 +4,7 @@ import torch
 from experiment_utils.train_models import get_dataloaders, get_dataloaders_incr, train, test, train_batch_multihead
 from experiment_utils.argument_parsing import *
 from args import *
-from model import resnet18, lrm_resnet18, LRMResNetV1
+from model import resnet18, lrm_resnet18, LRMResNetV2
 
 
 def append_to_file(filepath: str, s: str):
@@ -65,7 +65,7 @@ def train_incr(args: IncrTrainingArgs, model, train_loaders, val_loaders, device
                      **{str(k+1): np.stack(acc) for k, acc in enumerate(running_test_results[:i+1])})
 
 
-def load_lrm(state=None, n_blocks=1, block_size_alpha=1.0, **kwargs):
+def load_lrm(state=None, n_blocks=1, block_size_alpha=1.0, load_fc=False, strict_load=True, **kwargs):
     if state is not None:
         n_blocks_new, block_size_alpha_new = n_blocks, block_size_alpha
         # get n_blocks and block_size_alpha
@@ -81,8 +81,9 @@ def load_lrm(state=None, n_blocks=1, block_size_alpha=1.0, **kwargs):
     lrm_model = lrm_resnet18(n_blocks=n_blocks, block_size_alpha=block_size_alpha, **kwargs)
 
     if state is not None:
-        state['fc.weight'], state['fc.bias'] = lrm_model.fc.weight, lrm_model.fc.bias
-        lrm_model.load_state_dict(state)
+        if not load_fc:
+            state['fc.weight'], state['fc.bias'] = lrm_model.fc.weight, lrm_model.fc.bias
+        lrm_model.load_state_dict(state, strict=strict_load)
         if n_blocks != n_blocks_new or block_size_alpha != block_size_alpha_new:
             lrm_model.restructure_blocks(n_blocks_new, block_size_alpha_new)
 
