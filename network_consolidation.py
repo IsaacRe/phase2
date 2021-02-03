@@ -59,8 +59,9 @@ def main_consolidate(data_args, train_args, model_args):
 
 def consolidate_multi_task(data_args, train_args, model, device=0):
     train_loaders, val_loaders, test_loaders = get_dataloaders_incr(data_args, load_test=True)
+    _, _, test_ldr = get_dataloaders(data_args, load_train=False)
 
-    reinit_layer, = find_network_modules_by_name(model, [train_args.layer])
+    reinit_layers = find_network_modules_by_name(model, train_args.layer)
 
     model.eval()
     # if not updating bn layer during training, disable model's train mode
@@ -75,30 +76,64 @@ def consolidate_multi_task(data_args, train_args, model, device=0):
         print('Pretrained model accuracy for task %d: %.2f' % (i, acc * 100.))
         pt_accuracies += [acc]
 
-    def save_layer(save_path):
-        reinit_layer.cpu()
-        torch.save(reinit_layer.state_dict(), save_path)
-        reinit_layer.cuda()
+    def save_layer(save_path, suffix='.pth'):
+        for layer, name in zip(reinit_layers, train_args.layer):
+            layer.cpu()
+            torch.save(layer.state_dict(), save_path + name + suffix)
+            layer.cuda()
 
-    def load_layer(load_path):
-        reinit_layer.cpu()
-        reinit_layer.load_state_dict(torch.load(load_path))
-        reinit_layer.cuda()
+    def load_layer(load_path, suffix='.pth'):
+        for layer, name in zip(reinit_layers, train_args.layer):
+            layer.cpu()
+            layer.load_state_dict(torch.load(load_path + name + suffix))
+            layer.cuda()
 
     base_dir = 'models/consolidation_experiments/diff_task/'
-    base_path = base_dir + train_args.layer + '-'
+    base_path = base_dir + '%d-layer/' % len(train_args.layer)
+
+    # covariance experimentation
+    """from sklearn.covariance import EmpiricalCovariance
+
+    def get_cov(ldr, sample_idxs=slice(0, 64), normalize=False):
+        feature_layer = reinit_layers[-1]
+        load_layer(base_path, suffix='-task_0.pth')
+        f1 = compute_features(model, feature_layer, ldr)
+        load_layer(base_path, suffix='-task_1.pth')
+        f2 = compute_features(model, feature_layer, ldr)
+
+        # subsample
+        f1 = torch.cat(f1)[:,sample_idxs].flatten(start_dim=1)
+        f2 = torch.cat(f2)[:,sample_idxs].flatten(start_dim=1)
+        fcat = torch.cat([f1, f2], dim=1)
+
+        length = f1.shape[1]
+
+        cov = EmpiricalCovariance().fit(fcat).covariace_
+        
+        if normalize:
+            cov = cov ** 2 / (cov ** 2).sum(axis=0)[None, :] / (cov ** 2).sum(axis=1)[:, None]
+        
+        cov1 = cov[:length, :length]
+        cov2 = cov[length:, length:]
+        xcov = cov[:length, length:]
+
+        return cov1, cov2, xcov
+
+    def get_kernel_sim():
+        pass
 
     # save pretrained parameterization of the layer
-    save_layer(base_path + 'full.pth')
+    save_layer(base_path, suffix='-full.pth')
 
     # reinitialize the layer
-    reinit_layer.reset_parameters()
-    save_layer(base_path + 'reinit.pth')
+    for layer in reinit_layers:
+        layer.reset_parameters()
+    save_layer(base_path, suffix='-reinit.pth')"""
 
     accuracies = []
     # train separately on each subtask
-    for i, (train_loader, val_loader) in enumerate(zip(train_loaders, val_loaders)):
-        train(train_args, model, train_loader, val_loader, device=device, optimize_modules=[reinit_layer],
+    """for i, (train_loader, val_loader) in enumerate(zip(train_loaders, val_loaders)):
+        train(train_args, model, train_loader, val_loader, device=device, optimize_modules=reinit_layers,
               multihead=True)
         model.eval()
         accs = []
@@ -110,24 +145,45 @@ def consolidate_multi_task(data_args, train_args, model, device=0):
             print('Task-%d-trained model accuracy for task %d: %.2f' % (i, j, acc * 100.))
 
         # save trained layer
-        save_layer(base_path + 'task_' + str(i) + '.pth')
+        save_layer(base_path, suffix='-task_%d.pth' % i)
 
         # reinitialize the layer
-        load_layer(base_path + 'reinit.pth')
+        load_layer(base_path, suffix='-reinit.pth')"""
 
     # consolidate using kernel averaging
     print('Consolidating separately trained layers...')
 
-    state1 = torch.load(base_path + 'task_0.pth')
-    state2 = torch.load(base_path + 'task_1.pth')
+    threshold = 0.3
+    for layer, name in zip(reinit_layers, train_args.layer):
+        w = torch.load(base_path + '%s-task_%d.pth' % (name, 0))['weight']
+        n_consolidated = torch.ones_like(w)
+        for i in range(1, 5):
+            new_w = torch.load(base_path + '%s-task_%d.pth' % (name, i))['weight']
+            # TODO normalize by distribution of weights in each layer
+            diff = ((w - new_w) ** 2).sum(axis=(1, 2, 3)) ** (1/2)
+            consolidate = diff < threshold
+            w[consolidate] = w[consolidate] + new_w[consolidate]
+            n_consolidated[consolidate] += 1
 
-    w = (state1['weight'] + state2['weight']) / 2
-    reinit_layer.weight.data[:] = w.to(device)
+        perc_consolidated = len(np.where(n_consolidated > 1)[0]) / n_consolidated.flatten().shape[0]
+        print('%.2f %% of weights consolidated for layer %s' % (perc_consolidated * 100., name))
+
+        w /= n_consolidated
+        layer.cpu()
+        layer.weight.data[:] = w
+        layer.cuda()
+
+    for layer, name in zip(reinit_layers, train_args.layer):
+        w = 0
+        for i in range(len(train_loaders)):
+            w = w + torch.load(base_path + '%s-task_%d.pth' % (name, i))['weight']
+
+        layer.weight.data[:] = w.to(device) / 5
 
     # test consolidated layer
     model.train()
     consolidated_accs = []
-    for i, test_loader in enumerate(train_loaders):
+    for i, test_loader in enumerate(test_loaders):
         c, t = test(model, test_loader, device=device, multihead=True)
         acc = (c.sum() / t.sum()).item()
         print('Accuracy of consolidated model on task %d: %.2f' % (i, acc * 100.))
@@ -194,6 +250,22 @@ def consolidate_single_task(data_args, train_args, model, device=0):
     c, t = test(model, val_loader)
     consolidated_acc = (c.sum() / t.sum()).item()
     print('Accuracy of consolidated model: %.2f' % (consolidated_acc * 100.))
+
+
+def compute_features(model, layer, loader, device=0):
+    from experiment_utils.utils.model_tracking import ModuleTracker, TrackingProtocol
+
+    tracker = ModuleTracker(TrackingProtocol('out'), layer)
+
+    features = []
+    with torch.no_grad():
+        for i, x, y in loader:
+            x = x.to(device)
+            with tracker.track():
+                model(x)
+                features += [tracker.gather_module_var(layer.name, 'out')]
+
+    return features
 
 
 def drop_features(args, model, train_loader, val_loader, device=0):
@@ -397,7 +469,7 @@ class FeatureConsolidator(nn.Module):
 class ConsolidateArgs(IncrTrainingArgs):
     ARGS = {
         'layer':
-            Argument('--layer', type=str, help='specify the layer to consolidate'),
+            Argument('--layer', type=str, nargs='*', help='specify the layer to consolidate'),
         'num_features':
             Argument('--num-features', type=int, help='specify the number of features at the layer of consolidation'),
         'num_samples':
