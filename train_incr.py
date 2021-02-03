@@ -56,7 +56,7 @@ def train_incr(args: IncrTrainingArgs, model, train_loaders, val_loaders, device
 
         if args.save_acc:
             entropy = class_div = None
-            if type(model) == LRMResNetV1:
+            if type(model) == LRMResNetV2:
                 entropy = model.get_entropy()
                 class_div = model.get_class_routing_divergence()
             np.savez(join(args.acc_save_dir, args.incr_results_path),
