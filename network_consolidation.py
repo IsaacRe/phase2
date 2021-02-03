@@ -88,7 +88,7 @@ def consolidate_multi_task(data_args, train_args, model, device=0):
             layer.load_state_dict(torch.load(load_path + name + suffix))
             layer.cuda()
 
-    base_dir = 'models/consolidation_experiments/diff_task/'
+    base_dir = 'models/consolidation_experiments/%s/' % train_args.experiment_id
     base_path = base_dir + '%d-layer/' % len(train_args.layer)
 
     # covariance experimentation
@@ -120,7 +120,7 @@ def consolidate_multi_task(data_args, train_args, model, device=0):
         return cov1, cov2, xcov
 
     def get_kernel_sim():
-        pass
+        pass"""
 
     # save pretrained parameterization of the layer
     save_layer(base_path, suffix='-full.pth')
@@ -128,11 +128,11 @@ def consolidate_multi_task(data_args, train_args, model, device=0):
     # reinitialize the layer
     for layer in reinit_layers:
         layer.reset_parameters()
-    save_layer(base_path, suffix='-reinit.pth')"""
+    save_layer(base_path, suffix='-reinit.pth')
 
     accuracies = []
     # train separately on each subtask
-    """for i, (train_loader, val_loader) in enumerate(zip(train_loaders, val_loaders)):
+    for i, (train_loader, val_loader) in enumerate(zip(train_loaders, val_loaders)):
         train(train_args, model, train_loader, val_loader, device=device, optimize_modules=reinit_layers,
               multihead=True)
         model.eval()
@@ -147,13 +147,15 @@ def consolidate_multi_task(data_args, train_args, model, device=0):
         # save trained layer
         save_layer(base_path, suffix='-task_%d.pth' % i)
 
-        # reinitialize the layer
-        load_layer(base_path, suffix='-reinit.pth')"""
+        if not train_args.incremental:
+            # reinitialize the layer
+            load_layer(base_path, suffix='-reinit.pth')
 
     # consolidate using kernel averaging
-    print('Consolidating separately trained layers...')
+    if not train_args.incremental:
+        print('Consolidating separately trained layers...')
 
-    threshold = 0.3
+    """threshold = 0.3
     for layer, name in zip(reinit_layers, train_args.layer):
         w = torch.load(base_path + '%s-task_%d.pth' % (name, 0))['weight']
         n_consolidated = torch.ones_like(w)
@@ -171,14 +173,15 @@ def consolidate_multi_task(data_args, train_args, model, device=0):
         w /= n_consolidated
         layer.cpu()
         layer.weight.data[:] = w
-        layer.cuda()
+        layer.cuda()"""
 
-    for layer, name in zip(reinit_layers, train_args.layer):
-        w = 0
-        for i in range(len(train_loaders)):
-            w = w + torch.load(base_path + '%s-task_%d.pth' % (name, i))['weight']
+    if not train_args.incremental:
+        for layer, name in zip(reinit_layers, train_args.layer):
+            w = 0
+            for i in range(len(train_loaders)):
+                w = w + torch.load(base_path + '%s-task_%d.pth' % (name, i))['weight']
 
-        layer.weight.data[:] = w.to(device) / 5
+            layer.weight.data[:] = w.to(device) / 5
 
     # test consolidated layer
     model.train()
@@ -231,20 +234,22 @@ def consolidate_single_task(data_args, train_args, model, device=0):
 
         save_layer(base_path + str(i) + '.pth')
 
-        # use different reinitialization
-        #load_layer(base_path + 'reinit.pth')
-        reinit_layer.reset_parameters()
-        save_layer(base_path + 'reinit_%d.pth' % (i + 1))
+        if not train_args.incremental:
+            # use different reinitialization
+            #load_layer(base_path + 'reinit.pth')
+            reinit_layer.reset_parameters()
+            save_layer(base_path + 'reinit_%d.pth' % (i + 1))
 
-    # attempt to consolidate separately trained layers into a single representation
-    print('Consolidating separately trained layers...')
+    if not train_args.incremental:
+        # attempt to consolidate separately trained layers into a single representation
+        print('Consolidating separately trained layers...')
 
-    # 1 - naive averaging
-    state1 = torch.load(base_path + '0.pth')
-    state2 = torch.load(base_path + '1.pth')
+        # 1 - naive averaging
+        state1 = torch.load(base_path + '0.pth')
+        state2 = torch.load(base_path + '1.pth')
 
-    w = (state1['weight'] + state2['weight']) / 2
-    reinit_layer.weight.data[:] = w.to(device)
+        w = (state1['weight'] + state2['weight']) / 2
+        reinit_layer.weight.data[:] = w.to(device)
 
     # test consolidated model
     c, t = test(model, val_loader)
@@ -477,7 +482,12 @@ class ConsolidateArgs(IncrTrainingArgs):
                      help='specify number of samples for each data subset in consolidation experiments'),
         'single_task':
             Argument('--single-task', action='store_true',
-                     help='perform experiment on separate subsets of the same task')
+                     help='perform experiment on separate subsets of the same task'),
+        'incremental':
+            Argument('--incremental', action='store_true',
+                     help='incrementally adapt params rather than consolidate after-the-fact'),
+        'experiment_id':
+            Argument('--experiment-id', type=str, default='diff_task', help='experiment id used for saving models')
     }
 
 
