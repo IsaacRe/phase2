@@ -1,6 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import torch
+import torch.nn.functional as F
 import torch.nn as nn
 from torch.distributions.normal import Normal
 from experiment_utils.utils.layer_injection import LayerInjector
@@ -26,6 +27,16 @@ def drop_output_nodes(state, keep_outputs):
         bias = state['fc.bias']
         state['fc.bias'] = bias[keep_outputs]
 
+
+def format_tuple_arg(t_or_not):
+    if hasattr(t_or_not, '__iter__'):
+        list_ = []
+        for elem in t_or_not:
+            assert type(elem) == int, 'data type not understood'
+            list_ += [elem]
+        return tuple(list_)
+    assert type(t_or_not) == int, 'data type not understood'
+    return tuple([t_or_not] * 2)
 
 
 def main_dropout(data_args, train_args, model_args):
@@ -461,6 +472,66 @@ class AdaptiveDropout(nn.Module):
 
     def compute_loss(self):
         return self.compute_suppression().sum()
+
+
+class FlattenConv(nn.Module):
+
+    def __init__(self, in_channel, kernel_size: Any = 3, stride: Any = 1, padding: Any = 1):
+        super(FlattenConv, self).__init__()
+        self.in_channel = in_channel
+        self.kernel_size = format_tuple_arg(kernel_size)
+        self.stride = format_tuple_arg(stride)
+        self.padding = format_tuple_arg(padding)
+        spatial_fan = self.kernel_size[0] * self.kernel_size[1]
+        self.fan_out = in_channel * spatial_fan
+        self.weight = torch.diag(torch.ones(spatial_fan)).repeat(in_channel, 1).reshape(self.fan_out,
+                                                                                        1,
+                                                                                        *self.kernel_size)
+
+    def __repr__(self):
+        return 'FlattenConv(in_channel=%d, kernel_size=%s, stride=%s, padding=%s)' % \
+               (self.in_channel, str(self.kernel_size), str(self.stride), str(self.padding))
+
+    def forward(self, input: torch.Tensor) -> torch.Tensor:
+        return F.conv2d(input, self.weight, stride=self.stride, padding=self.padding,
+                        groups=self.in_channel)
+
+
+class BlockRoutingConv(nn.Module):
+
+    def __init__(self, in_channels, out_channels, blocks, kernel_size=3, stride=1, padding=1, route_forward=False):
+        kernel_size = format_tuple_arg(kernel_size)
+        fan_in = in_channels * kernel_size[0] * kernel_size[1]
+        self.inputs_per_block = fan_in // blocks
+
+        self.flatten = FlattenConv(in_channels, kernel_size=kernel_size, stride=stride, padding=padding)
+        self.classifier = nn.Conv2d(in_channels=fan_in, out_channels=blocks, kernel_size=1, stride=1, padding=0)
+        self.conv = nn.Conv2d(in_channels=fan_in, out_channels=out_channels, kernel_size=1, stride=1, padding=0)
+
+        self.route_forward = route_forward
+        self.logits = None
+        self.sigmoid = nn.Sigmoid()
+
+    def forward(self, input: torch.Tensor, output: torch.Tensor) -> torch.Tensor:
+        flat = self.flatten(input)  # [batch X in_channel * k_h * k_w X h X w]
+        logits = self.classifier(flat)  # [batch X blocks X h X w]
+        batch, blocks, h, w = logits.shape
+        if self.training:
+            self.logits = logits
+        preds = self.sigmoid(logits).round()
+        expand = preds[:,:,None].repeat(1, 1, self.inputs_per_block, 1, 1)
+        expand = expand.reshape()
+        mask = expand.type(torch.bool)  # [batch X in_channel * k_h * k_w X h X w]
+
+        # if route_forward, set input patches to zero, otherwise just cut the gradient graph
+        out = torch.zeros_like(flat)
+        if self.route_forward:
+            out[mask] = flat[mask]
+        else:
+            out[~mask] = flat.data[~mask]
+            out[mask] = flat[mask]
+
+        return self.conv(flat)
 
 
 class FeatureConsolidator(nn.Module):
