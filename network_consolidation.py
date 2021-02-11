@@ -7,7 +7,7 @@ from torch.distributions.normal import Normal
 from experiment_utils.utils.layer_injection import LayerInjector
 from args import *
 from experiment_utils.train_models import test, train, get_dataloaders_incr, get_dataloaders, get_subset_data_loaders
-from experiment_utils.utils.helpers import find_network_modules_by_name
+from experiment_utils.utils.helpers import find_network_modules_by_name, set_torchvision_network_module
 from model import resnet18
 
 
@@ -68,11 +68,41 @@ def main_consolidate(data_args, train_args, model_args):
         consolidate_multi_task(data_args, train_args, net, device=0)
 
 
+def apply_module_method_if_exists(model, method_name):
+    def model_apply_fn(*args, **kwargs):
+        def module_apply_fn(m):
+            if hasattr(m, method_name) and m != model:
+                getattr(m, method_name)(*args, **kwargs)
+
+        model.apply(module_apply_fn)
+
+    return model_apply_fn
+
+
 def consolidate_multi_task(data_args, train_args, model, device=0):
     train_loaders, val_loaders, test_loaders = get_dataloaders_incr(data_args, load_test=True)
     _, _, test_ldr = get_dataloaders(data_args, load_train=False)
 
     reinit_layers = find_network_modules_by_name(model, train_args.layer)
+
+    if train_args.superimpose:
+
+        # define SuperConv model-wise apply methods
+        model.superimpose = apply_module_method_if_exists(model, 'superimpose')
+        model.load_superimposed_weight = apply_module_method_if_exists(model, 'load_superimposed_weight')
+        model.update_component = apply_module_method_if_exists(model, 'update_component')
+        model.scale_supconv_grads = apply_module_method_if_exists(model, 'scale_grad')
+
+        def build_super_conv(conv):
+            return SuperConv(conv.in_channels, conv.out_channels, conv.kernel_size, bias=conv.bias is not None,
+                             stride=conv.stride, padding=conv.padding, dilation=conv.dilation, groups=conv.groups)
+
+        for i, layer_name in enumerate(train_args.layer):
+            old_conv = reinit_layers[i]
+            sup_conv = build_super_conv(old_conv)
+            set_torchvision_network_module(model, layer_name, sup_conv)
+            sup_conv.cuda()
+            reinit_layers[i] = sup_conv
 
     model.eval()
     # if not updating bn layer during training, disable model's train mode
@@ -80,12 +110,12 @@ def consolidate_multi_task(data_args, train_args, model, device=0):
         model.train = lambda *args, **kwargs: None
 
     # test pretrained model accuracy
-    pt_accuracies = []
+    """pt_accuracies = []
     for i, test_loader in enumerate(test_loaders):
         c, t = test(model, test_loader, device=device, multihead=True)
         acc = (c.sum() / t.sum()).item()
         print('Pretrained model accuracy for task %d: %.2f' % (i, acc * 100.))
-        pt_accuracies += [acc]
+        pt_accuracies += [acc]"""
 
     def save_layer(save_path, suffix='.pth'):
         for layer, name in zip(reinit_layers, train_args.layer):
@@ -137,16 +167,18 @@ def consolidate_multi_task(data_args, train_args, model, device=0):
     save_layer(base_path, suffix='-full.pth')
 
     # reinitialize the layer
-    for layer in reinit_layers:
-        layer.reset_parameters()
-    save_layer(base_path, suffix='-reinit.pth')
+    if not train_args.superimpose:
+        for layer in reinit_layers:
+            layer.reset_parameters()
+        save_layer(base_path, suffix='-reinit.pth')
 
     accuracies = []
     # train separately on each subtask
     for i, (train_loader, val_loader) in enumerate(zip(train_loaders, val_loaders)):
         train(train_args, model, train_loader, val_loader, device=device, optimize_modules=reinit_layers,
               multihead=True)
-        model.eval()
+        if train_args.superimpose:
+            model.superimpose(True)
         accs = []
         accuracies += [accs]
         for j, test_loader in enumerate(test_loaders):
@@ -155,12 +187,20 @@ def consolidate_multi_task(data_args, train_args, model, device=0):
             accs += [acc]
             print('Task-%d-trained model accuracy for task %d: %.2f' % (i, j, acc * 100.))
 
+        # load superimposed weight into memory to be saved
+        if train_args.superimpose:
+            model.load_superimposed_weight()
+
         # save trained layer
         save_layer(base_path, suffix='-task_%d.pth' % i)
 
         if not train_args.incremental:
             # reinitialize the layer
             load_layer(base_path, suffix='-reinit.pth')
+
+        # reset weight and component in SuperConv
+        if train_args.superimpose:
+            model.update_component()
 
     # consolidate using kernel averaging
     if not train_args.incremental:
@@ -424,6 +464,71 @@ def drop_features(args, model, train_loader, val_loader, device=0):
         test(model, val_loader, device=device, multihead=False)
 
 
+class SuperConv(nn.Conv2d):
+
+    def __init__(self, in_channels, out_channels, kernel_size, bias=True,
+                 stride=1, padding=1, dilation=1, groups=1):
+        super(SuperConv, self).__init__(in_channels, out_channels, kernel_size,
+                                        bias=bias, stride=stride, padding=padding,
+                                        dilation=dilation, groups=groups)
+
+        # load random intialization onto cpu for later exposures
+        self.random_init = self.weight.data.clone().cpu()
+
+        # intialize component tensor to zero
+        self.component = torch.zeros_like(self.weight)
+
+        self.consolidated_weights = 0
+        self.superimposing = True
+
+    def _superimpose(self):
+        if self.component.device != self.weight.device:
+            self.component = self.component.to(self.weight.device)
+
+        # scale weight and component
+        return (self.weight + self.component * self.consolidated_weights) / (1 + self.consolidated_weights)
+
+    def superimpose(self, mode=True):
+        self.superimposing = mode
+
+    def train(self, mode=True):
+        super(SuperConv, self).train(mode=mode)
+        self.superimpose(mode=mode)
+
+    def load_superimposed_weight(self):
+        if self.component.device != self.weight.device:
+            self.component = self.component.to(self.weight.device)
+        self.weight.data[:] = self._superimpose().data
+        self.component[:] = 0
+
+        # update number of consolidated weights
+        self.consolidated_weights += 1
+
+    def update_component(self):
+        random_init = self.random_init.to(self.weight.device)
+
+        # get sum of all updates applied during this data exposure and store in component
+        self.component = self.weight.data.clone()  # - random_init
+
+        # reset weight to random init
+        self.weight.data[:] = random_init
+
+    def iterate(self):
+        self.load_superimposed_weight()
+        self.update_component()
+
+    def scale_grad(self):
+        self.weight.grad /= 2
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        if self.superimposing:
+            weight = self._superimpose()
+        else:
+            weight = self.weight
+        return F.conv2d(x, weight, stride=self.stride, padding=self.padding,
+                        dilation=self.dilation, groups=self.groups)
+
+
 class StitchingLayer(nn.Module):
     pass
 
@@ -558,7 +663,9 @@ class ConsolidateArgs(IncrTrainingArgs):
             Argument('--incremental', action='store_true',
                      help='incrementally adapt params rather than consolidate after-the-fact'),
         'experiment_id':
-            Argument('--experiment-id', type=str, default='diff_task', help='experiment id used for saving models')
+            Argument('--experiment-id', type=str, default='diff_task', help='experiment id used for saving models'),
+        'superimpose':
+            Argument('--superimpose', action='store_true', help='experiment with superimposed convolutions')
     }
 
 
