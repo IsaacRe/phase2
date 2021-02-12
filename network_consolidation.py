@@ -104,6 +104,18 @@ def consolidate_multi_task(data_args, train_args, model, device=0):
             sup_conv.cuda()
             reinit_layers[i] = sup_conv
 
+    # disable affine and running stats of retrained bn layers
+    model.layer3[0].bn1 = nn.BatchNorm2d(model.layer3[0].bn1.num_features, affine=False).cuda()
+    model.layer3[0].bn2 = nn.BatchNorm2d(model.layer3[0].bn2.num_features, affine=False).cuda()
+    model.layer3[0].downsample[1] = nn.BatchNorm2d(model.layer3[0].downsample[1].num_features, affine=False).cuda()
+    model.layer3[1].bn1 = nn.BatchNorm2d(model.layer3[1].bn1.num_features, affine=False).cuda()
+    model.layer3[1].bn2 = nn.BatchNorm2d(model.layer3[1].bn2.num_features, affine=False).cuda()
+    model.layer4[0].bn1 = nn.BatchNorm2d(model.layer4[0].bn1.num_features, affine=False).cuda()
+    model.layer4[0].bn2 = nn.BatchNorm2d(model.layer4[0].bn2.num_features, affine=False).cuda()
+    model.layer4[0].downsample[1] = nn.BatchNorm2d(model.layer4[0].downsample[1].num_features, affine=False).cuda()
+    model.layer4[1].bn1 = nn.BatchNorm2d(model.layer4[1].bn1.num_features, affine=False).cuda()
+    model.layer4[1].bn2 = nn.BatchNorm2d(model.layer4[1].bn2.num_features, affine=False).cuda()
+
     model.eval()
     # if not updating bn layer during training, disable model's train mode
     if not train_args.fit_bn_stats:
@@ -477,6 +489,9 @@ class SuperConv(nn.Conv2d):
 
         # intialize component tensor to zero
         self.component = torch.zeros_like(self.weight)
+
+        # loss from L2 penalty on weight movement
+        self.l2 = None
 
         self.consolidated_weights = 0
         self.superimposing = True
