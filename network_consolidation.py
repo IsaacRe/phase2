@@ -497,7 +497,7 @@ def drop_features(args, model, train_loader, val_loader, device=0):
 class SuperConv(nn.Conv2d):
 
     def __init__(self, in_channels, out_channels, kernel_size, bias=True,
-                 stride=1, padding=1, dilation=1, groups=1):
+                 stride=1, padding=1, dilation=1, groups=1, normalize=True):
         super(SuperConv, self).__init__(in_channels, out_channels, kernel_size,
                                         bias=bias, stride=stride, padding=padding,
                                         dilation=dilation, groups=groups)
@@ -513,6 +513,31 @@ class SuperConv(nn.Conv2d):
 
         self.consolidated_weights = 0
         self.superimposing = True
+
+        # use cosine similarity as function output
+        self.normalize = normalize
+
+    def _normalize_x(self, x):
+        if self.groups > 1:
+            raise NotImplementedError
+        return F.conv2d(x ** 2, torch.ones(1, *self.weight.shape[1:]).to(self.weight.device), stride=self.stride,
+                        padding=self.padding, dilation=self.dilation, groups=self.groups)
+
+    def _normalize_w(self, x, w=None):
+        if self.groups > 1:
+            raise NotImplementedError
+        if w is None:
+            w = self.weight
+        return F.conv2d(torch.ones_like(x), w ** 2, stride=self.stride,
+                        padding=self.padding, dilation=self.dilation, groups=self.groups)
+
+    def normalize_weight(self):
+        l2 = (self.weight.data ** 2).sum(dim=3).sum(dim=2).sum(dim=1)  # [out channels]
+        self.weight.data[:] = self.weight.data / l2[:, None, None, None]
+
+    def normalize_component(self):
+        l2 = (self.component ** 2).sum(dim=3).sum(dim=2).sum(dim=1)  # [out channels]
+        self.component[:] = self.component / l2[:, None, None, None]
 
     def _superimpose(self):
         if self.component.device != self.weight.device:
@@ -532,6 +557,8 @@ class SuperConv(nn.Conv2d):
         if self.component.device != self.weight.device:
             self.component = self.component.to(self.weight.device)
         self.weight.data[:] = self._superimpose().data
+        if self.normalize:
+            self.normalize_weight()
         self.component[:] = 0
 
         # update number of consolidated weights
@@ -546,6 +573,10 @@ class SuperConv(nn.Conv2d):
         # reset weight to random init
         self.weight.data[:] = random_init
 
+        if self.normalize:
+            self.normalize_weight()
+            self.normalize_component()
+
     def iterate(self):
         self.load_superimposed_weight()
         self.update_component()
@@ -558,25 +589,55 @@ class SuperConv(nn.Conv2d):
             weight = self._superimpose()
         else:
             weight = self.weight
-        return F.conv2d(x, weight, stride=self.stride, padding=self.padding,
-                        dilation=self.dilation, groups=self.groups)
+        out = F.conv2d(x, weight, stride=self.stride, padding=self.padding,
+                       dilation=self.dilation, groups=self.groups)
+        if self.normalize:
+            x_l2 = self._normalize_x(x)
+            w_l2 = self._normalize_w(x, w=weight)
+            out /= w_l2 * x_l2
+
+        return out
 
 
 class L2Conv(nn.Conv2d):
 
     def __init__(self, in_channels, out_channels, kernel_size, bias=True,
-                 stride=1, padding=1, dilation=1, groups=1):
+                 stride=1, padding=1, dilation=1, groups=1, normalize=True):
         super(L2Conv, self).__init__(in_channels, out_channels, kernel_size,
                                      bias=bias, stride=stride, padding=padding,
                                      dilation=dilation, groups=groups)
-
+        self.normalize = normalize
         self.previous_weight = 0
+
+    def _normalize_x(self, x):
+        if self.groups > 1:
+            raise NotImplementedError
+        return F.conv2d(x ** 2, torch.ones(1, *self.weight.shape[1:]).to(self.weight.device), stride=self.stride,
+                        padding=self.padding, dilation=self.dilation, groups=self.groups)
+
+    def _normalize_w(self, x):
+        if self.groups > 1:
+            raise NotImplementedError
+        return F.conv2d(torch.ones_like(x), self.weight ** 2, stride=self.stride,
+                        padding=self.padding, dilation=self.dilation, groups=self.groups)
+
+    def normalize_weight(self):
+        l2 = (self.weight.data ** 2).sum(dim=3).sum(dim=2).sum(dim=1)  # [out channels]
+        self.weight.data[:] = self.weight.data / l2[:,None,None,None]
 
     def update_previous_weight(self):
         self.previous_weight = self.weight.data.clone()
 
     def compute_l2(self):
         return ((self.weight - self.previous_weight) ** 2).sum()
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        out = super(L2Conv, self).forward(x)
+        if self.normalize:
+            x_l2 = self._normalize_x(x)
+            w_l2 = self._normalize_w(x)
+            out /= w_l2 * x_l2
+        return out
 
 
 class StitchingLayer(nn.Module):
