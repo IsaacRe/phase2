@@ -94,8 +94,11 @@ def consolidate_multi_task(data_args, train_args, model, device=0):
         model.scale_supconv_grads = apply_module_method_if_exists(model, 'scale_grad')
 
         def build_super_conv(conv):
-            return SuperConv(conv.in_channels, conv.out_channels, conv.kernel_size, bias=conv.bias is not None,
-                             stride=conv.stride, padding=conv.padding, dilation=conv.dilation, groups=conv.groups)
+            in_ch = conv.in_channels // train_args.redundant_groups * train_args.redundant_groups
+            out_ch = conv.out_channels // train_args.redundant_groups * train_args.redundant_groups
+            return SuperConv(in_ch, out_ch, conv.kernel_size, bias=conv.bias is not None,
+                             stride=conv.stride, padding=conv.padding, dilation=conv.dilation,
+                             groups=conv.groups * train_args.redundant_groups, drop_groups=train_args.drop_groups)
 
         for i, layer_name in enumerate(train_args.layer):
             old_conv = reinit_layers[i]
@@ -108,8 +111,11 @@ def consolidate_multi_task(data_args, train_args, model, device=0):
         model.update_previous_params = apply_module_method_if_exists(model, 'update_previous_weight')
 
         def build_l2_conv(conv):
-            return L2Conv(conv.in_channels, conv.out_channels, conv.kernel_size, bias=conv.bias is not None,
-                          stride=conv.stride, padding=conv.padding, dilation=conv.dilation, groups=conv.groups)
+            in_ch = conv.in_channels // train_args.redundant_groups * train_args.redundant_groups
+            out_ch = conv.out_channels // train_args.redundant_groups * train_args.redundant_groups
+            return L2Conv(in_ch, out_ch, conv.kernel_size, bias=conv.bias is not None,
+                          stride=conv.stride, padding=conv.padding, dilation=conv.dilation,
+                          groups=conv.groups * train_args.redundant_groups)
 
         for i, layer_name in enumerate(train_args.layer):
             old_conv = reinit_layers[i]
@@ -119,11 +125,11 @@ def consolidate_multi_task(data_args, train_args, model, device=0):
             reinit_layers[i] = l2_conv
 
     # disable affine and running stats of retrained bn layers
-    model.layer3[0].bn1 = nn.BatchNorm2d(model.layer3[0].bn1.num_features, affine=False).cuda()
-    model.layer3[0].bn2 = nn.BatchNorm2d(model.layer3[0].bn2.num_features, affine=False).cuda()
-    model.layer3[0].downsample[1] = nn.BatchNorm2d(model.layer3[0].downsample[1].num_features, affine=False).cuda()
-    model.layer3[1].bn1 = nn.BatchNorm2d(model.layer3[1].bn1.num_features, affine=False).cuda()
-    model.layer3[1].bn2 = nn.BatchNorm2d(model.layer3[1].bn2.num_features, affine=False).cuda()
+    #model.layer3[0].bn1 = nn.BatchNorm2d(model.layer3[0].bn1.num_features, affine=False).cuda()
+    #model.layer3[0].bn2 = nn.BatchNorm2d(model.layer3[0].bn2.num_features, affine=False).cuda()
+    #model.layer3[0].downsample[1] = nn.BatchNorm2d(model.layer3[0].downsample[1].num_features, affine=False).cuda()
+    #model.layer3[1].bn1 = nn.BatchNorm2d(model.layer3[1].bn1.num_features, affine=False).cuda()
+    #model.layer3[1].bn2 = nn.BatchNorm2d(model.layer3[1].bn2.num_features, affine=False).cuda()
     model.layer4[0].bn1 = nn.BatchNorm2d(model.layer4[0].bn1.num_features, affine=False).cuda()
     model.layer4[0].bn2 = nn.BatchNorm2d(model.layer4[0].bn2.num_features, affine=False).cuda()
     model.layer4[0].downsample[1] = nn.BatchNorm2d(model.layer4[0].downsample[1].num_features, affine=False).cuda()
@@ -497,7 +503,11 @@ def drop_features(args, model, train_loader, val_loader, device=0):
 class SuperConv(nn.Conv2d):
 
     def __init__(self, in_channels, out_channels, kernel_size, bias=True,
-                 stride=1, padding=1, dilation=1, groups=1, normalize=True):
+                 stride=1, padding=1, dilation=1, groups=1, normalize=False, drop_groups=False):
+        # set redundant_groups
+        self.redundant_groups = groups > 1 and not drop_groups
+        self.drop_groups = drop_groups
+        groups = groups if drop_groups else 1
         super(SuperConv, self).__init__(in_channels, out_channels, kernel_size,
                                         bias=bias, stride=stride, padding=padding,
                                         dilation=dilation, groups=groups)
@@ -516,6 +526,8 @@ class SuperConv(nn.Conv2d):
 
         # use cosine similarity as function output
         self.normalize = normalize
+
+        self.drop_groups = drop_groups
 
     def _normalize_x(self, x):
         if self.groups > 1:
@@ -538,6 +550,27 @@ class SuperConv(nn.Conv2d):
     def normalize_component(self):
         l2 = (self.component ** 2).sum(dim=3).sum(dim=2).sum(dim=1)  # [out channels]
         self.component[:] = self.component / l2[:, None, None, None]
+
+    def _shuffle_groups(self):
+        group_idx = np.random.choice(self.groups, self.groups, replace=False)
+        group_idx = group_idx[:,None].repeat(self.out_channels // self.groups, 1).reshape(-1)
+        self.weight.data[:] = self.weight.data[group_idx]
+
+        group_idx = np.random.choice(self.groups, self.groups, replace=False)
+        group_idx = group_idx[:, None].repeat(self.out_channels // self.groups, 1).reshape(-1)
+        self.component[:] = self.component[group_idx]
+
+    def _duplicate_mean(self, y):
+        batch, out_ch, h, w = y.shape
+        y = y.reshape(batch, self.groups, out_ch // self.groups, h, w)
+        y = y.mean(dim=1)
+        y = y[:,None].repeat(1, self.groups, 1, 1, 1).reshape(batch, out_ch, h, w)
+        return y
+
+    def _drop_groups(self, y):
+        # set outputs for all but first group to zero
+        y[:, self.out_channels // self.groups:] -= y[:, self.out_channels // self.groups:]
+        return y
 
     def _superimpose(self):
         if self.component.device != self.weight.device:
@@ -585,6 +618,10 @@ class SuperConv(nn.Conv2d):
         self.weight.grad /= 2
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # shuffle groups
+        if self.redundant_groups:
+            self._shuffle_groups()
+
         if self.superimposing:
             weight = self._superimpose()
         else:
@@ -595,6 +632,11 @@ class SuperConv(nn.Conv2d):
             x_l2 = self._normalize_x(x)
             w_l2 = self._normalize_w(x, w=weight)
             out /= w_l2 * x_l2
+
+        if self.redundant_groups:
+            out = self._duplicate_mean(out)
+        if self.drop_groups or self.redundant_groups:
+            out = self._drop_groups(out)
 
         return out
 
@@ -781,7 +823,11 @@ class ConsolidateArgs(IncrTrainingArgs):
             Argument('--l2', action='store_true',
                      help='add L2 penalty to regularize params toward previous params during subsequent task training'),
         'l2_weight':
-            Argument('--l2-weight', type=float, default=0.1, help='weight for the L2 penalty')
+            Argument('--l2-weight', type=float, default=0.1, help='weight for the L2 penalty'),
+        'redundant_groups':
+            Argument('--redundant-groups', type=int, default=1, help='number of redundant groups to use'),
+        'drop_groups':
+            Argument('--drop-groups', action='store_true', help='drop redundant conv blocks')
     }
 
 
