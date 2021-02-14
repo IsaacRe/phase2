@@ -104,6 +104,20 @@ def consolidate_multi_task(data_args, train_args, model, device=0):
             sup_conv.cuda()
             reinit_layers[i] = sup_conv
 
+    if train_args.l2:
+        model.update_previous_params = apply_module_method_if_exists(model, 'update_previous_weight')
+
+        def build_l2_conv(conv):
+            return L2Conv(conv.in_channels, conv.out_channels, conv.kernel_size, bias=conv.bias is not None,
+                          stride=conv.stride, padding=conv.padding, dilation=conv.dilation, groups=conv.groups)
+
+        for i, layer_name in enumerate(train_args.layer):
+            old_conv = reinit_layers[i]
+            l2_conv = build_l2_conv(old_conv)
+            set_torchvision_network_module(model, layer_name, l2_conv)
+            l2_conv.cuda()
+            reinit_layers[i] = l2_conv
+
     # disable affine and running stats of retrained bn layers
     model.layer3[0].bn1 = nn.BatchNorm2d(model.layer3[0].bn1.num_features, affine=False).cuda()
     model.layer3[0].bn2 = nn.BatchNorm2d(model.layer3[0].bn2.num_features, affine=False).cuda()
@@ -213,6 +227,10 @@ def consolidate_multi_task(data_args, train_args, model, device=0):
         # reset weight and component in SuperConv
         if train_args.superimpose:
             model.update_component()
+
+        # update previous parameterization if conducting l2 penalty
+        if train_args.l2:
+            model.update_previous_params()
 
     # consolidate using kernel averaging
     if not train_args.incremental:
@@ -544,6 +562,23 @@ class SuperConv(nn.Conv2d):
                         dilation=self.dilation, groups=self.groups)
 
 
+class L2Conv(nn.Conv2d):
+
+    def __init__(self, in_channels, out_channels, kernel_size, bias=True,
+                 stride=1, padding=1, dilation=1, groups=1):
+        super(L2Conv, self).__init__(in_channels, out_channels, kernel_size,
+                                     bias=bias, stride=stride, padding=padding,
+                                     dilation=dilation, groups=groups)
+
+        self.previous_weight = 0
+
+    def update_previous_weight(self):
+        self.previous_weight = self.weight.data.clone()
+
+    def compute_l2(self):
+        return ((self.weight - self.previous_weight) ** 2).sum()
+
+
 class StitchingLayer(nn.Module):
     pass
 
@@ -680,7 +715,12 @@ class ConsolidateArgs(IncrTrainingArgs):
         'experiment_id':
             Argument('--experiment-id', type=str, default='diff_task', help='experiment id used for saving models'),
         'superimpose':
-            Argument('--superimpose', action='store_true', help='experiment with superimposed convolutions')
+            Argument('--superimpose', action='store_true', help='experiment with superimposed convolutions'),
+        'l2':
+            Argument('--l2', action='store_true',
+                     help='add L2 penalty to regularize params toward previous params during subsequent task training'),
+        'l2_weight':
+            Argument('--l2-weight', type=float, default=0.1, help='weight for the L2 penalty')
     }
 
 
