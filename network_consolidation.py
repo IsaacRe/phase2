@@ -107,7 +107,7 @@ def consolidate_multi_task(data_args, train_args, model, device=0):
             sup_conv.cuda()
             reinit_layers[i] = sup_conv
 
-    if train_args.l2:
+    elif train_args.l2:
         model.update_previous_params = apply_module_method_if_exists(model, 'update_previous_weight')
 
         def build_l2_conv(conv):
@@ -125,11 +125,11 @@ def consolidate_multi_task(data_args, train_args, model, device=0):
             reinit_layers[i] = l2_conv
 
     # disable affine and running stats of retrained bn layers
-    #model.layer3[0].bn1 = nn.BatchNorm2d(model.layer3[0].bn1.num_features, affine=False).cuda()
-    #model.layer3[0].bn2 = nn.BatchNorm2d(model.layer3[0].bn2.num_features, affine=False).cuda()
-    #model.layer3[0].downsample[1] = nn.BatchNorm2d(model.layer3[0].downsample[1].num_features, affine=False).cuda()
-    #model.layer3[1].bn1 = nn.BatchNorm2d(model.layer3[1].bn1.num_features, affine=False).cuda()
-    #model.layer3[1].bn2 = nn.BatchNorm2d(model.layer3[1].bn2.num_features, affine=False).cuda()
+    model.layer3[0].bn1 = nn.BatchNorm2d(model.layer3[0].bn1.num_features, affine=False).cuda()
+    model.layer3[0].bn2 = nn.BatchNorm2d(model.layer3[0].bn2.num_features, affine=False).cuda()
+    model.layer3[0].downsample[1] = nn.BatchNorm2d(model.layer3[0].downsample[1].num_features, affine=False).cuda()
+    model.layer3[1].bn1 = nn.BatchNorm2d(model.layer3[1].bn1.num_features, affine=False).cuda()
+    model.layer3[1].bn2 = nn.BatchNorm2d(model.layer3[1].bn2.num_features, affine=False).cuda()
     model.layer4[0].bn1 = nn.BatchNorm2d(model.layer4[0].bn1.num_features, affine=False).cuda()
     model.layer4[0].bn2 = nn.BatchNorm2d(model.layer4[0].bn2.num_features, affine=False).cuda()
     model.layer4[0].downsample[1] = nn.BatchNorm2d(model.layer4[0].downsample[1].num_features, affine=False).cuda()
@@ -235,7 +235,7 @@ def consolidate_multi_task(data_args, train_args, model, device=0):
             model.update_component()
 
         # update previous parameterization if conducting l2 penalty
-        if train_args.l2:
+        elif train_args.l2:
             model.update_previous_params()
 
     # consolidate using kernel averaging
@@ -616,6 +616,9 @@ class SuperConv(nn.Conv2d):
 
     def scale_grad(self):
         self.weight.grad /= 2
+
+    def compute_l2(self):
+        return ((self.weight - self.component) ** 2).sum()
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         # shuffle groups
