@@ -820,6 +820,9 @@ class ConsolidateArgs(IncrTrainingArgs):
                      help='incrementally adapt params rather than consolidate after-the-fact'),
         'experiment_id':
             Argument('--experiment-id', type=str, default='diff_task', help='experiment id used for saving models'),
+        'reset_bn':
+            Argument('--reset-bn', action='store_true',
+                     help='disable affine layer and stats tracking for all bn layers'),
         'superimpose':
             Argument('--superimpose', action='store_true', help='experiment with superimposed convolutions'),
         'l2':
@@ -827,6 +830,9 @@ class ConsolidateArgs(IncrTrainingArgs):
                      help='add L2 penalty to regularize params toward previous params during subsequent task training'),
         'l2_weight':
             Argument('--l2-weight', type=float, default=0.1, help='weight for the L2 penalty'),
+        'regularization':
+            Argument('--regularization', type=str, default='none', choices=['none', 'l2', 'ewc', 'si', 'mas'],
+                     help='choice of l2 regularization scheme for incremental training'),
         'redundant_groups':
             Argument('--redundant-groups', type=int, default=1, help='number of redundant groups to use'),
         'drop_groups':

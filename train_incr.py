@@ -3,8 +3,10 @@ import numpy as np
 import torch
 from experiment_utils.train_models import get_dataloaders, get_dataloaders_incr, train, test, train_batch_multihead
 from experiment_utils.argument_parsing import *
+from experiment_utils.utils.helpers import set_torchvision_network_module
 from args import *
 from model import resnet18, lrm_resnet18, LRMResNetV2
+from network_consolidation import apply_module_method_if_exists, SuperConv, L2Conv, ExperimentArgs
 
 
 def append_to_file(filepath: str, s: str):
@@ -18,12 +20,64 @@ def set_task(model, task_id):
         model.set_task_id(task_id)
 
 
+def reset_bn(model):
+    def build_bn(bn):
+        return torch.nn.BatchNorm2d(bn.num_features, eps=bn.eps, momentum=bn.momentum, affine=False,
+                                    track_running_stats=False)
+    for name, module in model.named_modules():
+        if type(module) == torch.nn.BatchNorm2d:
+            bn = build_bn(module)
+            set_torchvision_network_module(model, name, bn)
+
+
 def train_incr(args: IncrTrainingArgs, model, train_loaders, val_loaders, device=0):
     # single run-through of all exposures
     acc_save_path = args.acc_save_path
     model_save_path = args.model_save_path
     running_test_results = [[] for _ in range(1, len(train_loaders) + 1)]
     model.active_outputs = []
+
+    # set l2 flag
+    if args.regularization != 'none':
+        args.l2 = True
+
+    # remove affine layer and stats tracking from all batchnorm layers
+    if args.reset_bn:
+        reset_bn(model)
+
+    optimize_modules = None
+    if args.superimpose:
+        model.superimpose = apply_module_method_if_exists(model, 'superimpose')
+        model.load_superimposed_weight = apply_module_method_if_exists(model, 'load_superimposed_weight')
+        model.update_component = apply_module_method_if_exists(model, 'update_component')
+        model.scale_supconv_grads = apply_module_method_if_exists(model, 'scale_grad')
+
+        def build_super_conv(conv):
+            return SuperConv(conv.in_channels, conv.out_channels, conv.kernel_size, bias=conv.bias is not None,
+                             stride=conv.stride, padding=conv.padding, dilation=conv.dilation, groups=conv.groups)
+
+        optimize_modules = []
+        for name, module in model.named_modules():
+            if type(module) == torch.nn.Conv2d:
+                sup_conv = build_super_conv(module).to(module.weight.device)
+                set_torchvision_network_module(model, name, sup_conv)
+                optimize_modules += [sup_conv]
+        optimize_modules += [model.fc]
+
+    elif args.regularization != 'none':
+        model.update_previous_params = apply_module_method_if_exists(model, 'update_previous_weight')
+
+        def build_l2_conv(conv):
+            return L2Conv(conv.in_channels, conv.out_channels, conv.kernel_size, bias=conv.bias is not None,
+                          stride=conv.stride, padding=conv.padding, dilation=conv.dilation, groups=conv.groups)
+
+        optimize_modules = []
+        for name, module in model.named_modules():
+            if type(module) == torch.nn.Conv2d:
+                sup_conv = build_l2_conv(module).to(module.weight.device)
+                set_torchvision_network_module(model, name, sup_conv)
+                optimize_modules += [sup_conv]
+        optimize_modules += [model.fc]
 
     for i, (train_loader, val_loader) in enumerate(zip(train_loaders, val_loaders)):
         if args.exposure_reinit:
@@ -38,11 +92,14 @@ def train_incr(args: IncrTrainingArgs, model, train_loaders, val_loaders, device
 
         args.acc_save_path = append_to_file(acc_save_path, '-exp%d' % (i + 1))
         args.model_save_path = append_to_file(model_save_path, '-exp%d' % (i + 1))
-        train(args, model, train_loader, val_loader, device=device, multihead=args.multihead, fc_only=False)#i > 0)
+        train(args, model, train_loader, val_loader, device=device, multihead=args.multihead, fc_only=False, #i > 0
+              optimize_modules=optimize_modules)
 
         print('Testing over all %d previously learned tasks...' % (i + 1))
         mean_acc = total_classes = 0
         model.eval()
+        if args.superimpose:
+            model.superimpose(True)
         for j, test_loader in enumerate(val_loaders[:i+1]):
             set_task(model, j)
 
@@ -53,6 +110,12 @@ def train_incr(args: IncrTrainingArgs, model, train_loaders, val_loaders, device
             total_classes += len(test_loader.classes)
         mean_acc = mean_acc / total_classes
         print("Mean accuracy over all %d previously learned tasks: %.4f" % (i + 1, mean_acc))
+
+        # update component/previous weight
+        if args.superimpose:
+            model.update_component()
+        elif args.regularization != 'none':
+            model.update_previous_params()
 
         if args.save_acc:
             entropy = class_div = None
@@ -91,7 +154,7 @@ def load_lrm(state=None, n_blocks=1, block_size_alpha=1.0, load_fc=False, strict
 
 
 def main():
-    data_args, train_args, model_args = parse_args(IncrDataArgs, IncrTrainingArgs, AllModelArgs)
+    data_args, train_args, model_args = parse_args(IncrDataArgs, ExperimentArgs, AllModelArgs)
     if train_args.batch and not train_args.multihead:
         train_loader, val_loader, test_loader = get_dataloaders(data_args, load_test=False)
     else:
