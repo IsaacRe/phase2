@@ -92,13 +92,14 @@ def train_incr(args: IncrTrainingArgs, model, train_loaders, val_loaders, device
 
         args.acc_save_path = append_to_file(acc_save_path, '-exp%d' % (i + 1))
         args.model_save_path = append_to_file(model_save_path, '-exp%d' % (i + 1))
-        train(args, model, train_loader, val_loader, device=device, multihead=args.multihead, fc_only=False, #i > 0
+        train(args, model, train_loader, *val_loaders[:i+1], device=device, multihead=args.multihead, fc_only=False, #i > 0
               optimize_modules=optimize_modules)
 
         # update regularization weighting scheme
         if args.regularization not in ['none', 'l2']:
             collect_l2_weight(model, train_loader, method=args.regularization, device=device)
 
+        """
         print('Testing over all %d previously learned tasks...' % (i + 1))
         mean_acc = total_classes = 0
         model.eval()
@@ -114,6 +115,7 @@ def train_incr(args: IncrTrainingArgs, model, train_loaders, val_loaders, device
             total_classes += len(test_loader.classes)
         mean_acc = mean_acc / total_classes
         print("Mean accuracy over all %d previously learned tasks: %.4f" % (i + 1, mean_acc))
+        """
 
         # update component/previous weight
         if args.superimpose:
@@ -121,6 +123,7 @@ def train_incr(args: IncrTrainingArgs, model, train_loaders, val_loaders, device
         elif args.regularization != 'none':
             model.update_previous_params()
 
+        """
         if args.save_acc:
             entropy = class_div = None
             if type(model) == LRMResNetV2:
@@ -130,6 +133,7 @@ def train_incr(args: IncrTrainingArgs, model, train_loaders, val_loaders, device
                      entropy=entropy,
                      class_div=class_div,
                      **{str(k+1): np.stack(acc) for k, acc in enumerate(running_test_results[:i+1])})
+                    """
 
 
 def load_lrm(state=None, n_blocks=1, block_size_alpha=1.0, load_fc=False, strict_load=True, **kwargs):
