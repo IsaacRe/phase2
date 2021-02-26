@@ -6,7 +6,7 @@ from experiment_utils.argument_parsing import *
 from experiment_utils.utils.helpers import set_torchvision_network_module
 from args import *
 from model import resnet18, lrm_resnet18, LRMResNetV2
-from network_consolidation import apply_module_method_if_exists, SuperConv, L2Conv, ExperimentArgs
+from network_consolidation import apply_module_method_if_exists, collect_l2_weight, SuperConv, L2Conv, ExperimentArgs
 
 
 def append_to_file(filepath: str, s: str):
@@ -94,6 +94,10 @@ def train_incr(args: IncrTrainingArgs, model, train_loaders, val_loaders, device
         args.model_save_path = append_to_file(model_save_path, '-exp%d' % (i + 1))
         train(args, model, train_loader, val_loader, device=device, multihead=args.multihead, fc_only=False, #i > 0
               optimize_modules=optimize_modules)
+
+        # update regularization weighting scheme
+        if args.regularization not in ['none', 'l2']:
+            collect_l2_weight(model, train_loader, method=args.regularization, device=device)
 
         print('Testing over all %d previously learned tasks...' % (i + 1))
         mean_acc = total_classes = 0

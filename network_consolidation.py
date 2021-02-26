@@ -1,3 +1,4 @@
+from tqdm.auto import tqdm
 import numpy as np
 import matplotlib.pyplot as plt
 import torch
@@ -500,6 +501,25 @@ def drop_features(args, model, train_loader, val_loader, device=0):
         test(model, val_loader, device=device, multihead=False)
 
 
+def collect_l2_weight(model, loader, method='mas', device=0):
+    total = 0
+    for i, x, y in tqdm(loader):
+        x = x.to(device)
+        out = model(x)
+        loss = (out ** 2).sum()
+        loss.backward()
+        total += len(y)
+
+    # set regularization weights
+    for n, m in model.named_modules():
+        if hasattr(m, 'l2_weight'):
+            if type(m.l2_weight) != torch.Tensor:
+                m.l2_weight = 0
+            m.l2_weight = m.l2_weight + m.weight.grad / total
+
+    model.zero_grad()
+
+
 class SuperConv(nn.Conv2d):
 
     def __init__(self, in_channels, out_channels, kernel_size, bias=True,
@@ -523,6 +543,9 @@ class SuperConv(nn.Conv2d):
 
         self.consolidated_weights = 0
         self.superimposing = True
+
+        # for regularization weighting schemes (MAS, EWC, SI, etc.)
+        self.l2_weight = 1
 
         # use cosine similarity as function output
         self.normalize = normalize
@@ -618,7 +641,10 @@ class SuperConv(nn.Conv2d):
         self.weight.grad /= 2
 
     def compute_l2(self):
-        return ((self.weight - self.component) ** 2).sum()
+        if self.component.device != self.weight.device:
+            self.component = self.component.to(self.weight.device)
+
+        return ((self.weight - self.component) ** 2 * self.l2_weight).sum()
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         # shuffle groups
@@ -647,12 +673,15 @@ class SuperConv(nn.Conv2d):
 class L2Conv(nn.Conv2d):
 
     def __init__(self, in_channels, out_channels, kernel_size, bias=True,
-                 stride=1, padding=1, dilation=1, groups=1, normalize=True):
+                 stride=1, padding=1, dilation=1, groups=1, normalize=False):
         super(L2Conv, self).__init__(in_channels, out_channels, kernel_size,
                                      bias=bias, stride=stride, padding=padding,
                                      dilation=dilation, groups=groups)
         self.normalize = normalize
-        self.previous_weight = 0
+        self.previous_weight = torch.zeros_like(self.weight)
+
+        # for regularization weighting schemes (MAS, EWC, SI, etc.)
+        self.l2_weight = 1
 
     def _normalize_x(self, x):
         if self.groups > 1:
@@ -674,7 +703,10 @@ class L2Conv(nn.Conv2d):
         self.previous_weight = self.weight.data.clone()
 
     def compute_l2(self):
-        return ((self.weight - self.previous_weight) ** 2).sum()
+        if self.previous_weight.device != self.weight.device:
+            self.previous_weight = self.previous_weight.to(self.weight.device)
+
+        return ((self.weight - self.previous_weight) ** 2 * self.l2_weight).sum()
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         out = super(L2Conv, self).forward(x)
