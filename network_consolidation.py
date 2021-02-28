@@ -126,6 +126,16 @@ def consolidate_multi_task(data_args, train_args, model, device=0):
             reinit_layers[i] = l2_conv
 
     # disable affine and running stats of retrained bn layers
+    model.bn1 = nn.BatchNorm2d(model.bn1.num_features, affine=False).cuda()
+    model.layer1[0].bn1 = nn.BatchNorm2d(model.layer1[0].bn1.num_features, affine=False).cuda()
+    model.layer1[0].bn2 = nn.BatchNorm2d(model.layer1[0].bn2.num_features, affine=False).cuda()
+    model.layer1[1].bn1 = nn.BatchNorm2d(model.layer1[1].bn1.num_features, affine=False).cuda()
+    model.layer1[1].bn2 = nn.BatchNorm2d(model.layer1[1].bn2.num_features, affine=False).cuda()
+    model.layer2[0].bn1 = nn.BatchNorm2d(model.layer2[0].bn1.num_features, affine=False).cuda()
+    model.layer2[0].bn2 = nn.BatchNorm2d(model.layer2[0].bn2.num_features, affine=False).cuda()
+    model.layer2[0].downsample[1] = nn.BatchNorm2d(model.layer2[0].downsample[1].num_features, affine=False).cuda()
+    model.layer2[1].bn1 = nn.BatchNorm2d(model.layer2[1].bn1.num_features, affine=False).cuda()
+    model.layer2[1].bn2 = nn.BatchNorm2d(model.layer2[1].bn2.num_features, affine=False).cuda()
     model.layer3[0].bn1 = nn.BatchNorm2d(model.layer3[0].bn1.num_features, affine=False).cuda()
     model.layer3[0].bn2 = nn.BatchNorm2d(model.layer3[0].bn2.num_features, affine=False).cuda()
     model.layer3[0].downsample[1] = nn.BatchNorm2d(model.layer3[0].downsample[1].num_features, affine=False).cuda()
