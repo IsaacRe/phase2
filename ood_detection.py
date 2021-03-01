@@ -115,12 +115,12 @@ def main_ood_detection(data_args, experiment_args, model_args):
 
         loss_pos = bce(pos_logits, torch.ones_like(pos_logits))
         loss_neg = bce(neg_logits, torch.zeros_like(neg_logits))
-        """loss_pseudo_pos = bce(pseudo_pos_logits, torch.zeros_like(pseudo_pos_logits))
-        loss_all_neg = loss_neg + loss_pseudo_pos
+        #loss_pseudo_pos = bce(pseudo_pos_logits, torch.zeros_like(pseudo_pos_logits))
+        #loss_all_neg = loss_neg + loss_pseudo_pos
 
         # weight positive and negative samples evenly
-        loss = (loss_pos * total_neg + loss_all_neg * total_pos) / 2 / total_neg / total_pos"""
-        loss = loss_pos + loss_neg
+        #loss = (loss_pos * total_neg + loss_all_neg * total_pos) / 2 / total_neg / total_pos
+        loss = (loss_pos + loss_neg) / 2
 
         pred_real = torch.sigmoid(m.log_real).round()
         acc_real = pred_real[:length_pos].sum().item() - (pred_real[length_pos:] - 1).sum().item()
@@ -157,16 +157,17 @@ def main_ood_detection(data_args, experiment_args, model_args):
         x = torch.cat([x0, x1], dim=0)
         net(x)
 
-        for n, m in net.named_modules():
-            if type(m) == OODConv:
-                loss = bce(m.log_real, y[:,None,None,None].repeat(1, *m.log_real.shape[1:]))
-                discriminator_losses_by_layer[n] += [loss.item()]
-                loss.backward()
-                optim.step()
-                optim.zero_grad()
+        # discriminator update
+        if optimize == 'discriminator':
+            for n, m in net.named_modules():
+                if type(m) == OODConv:
+                    """#loss = bce(m.log_real, y[:,None,None,None].repeat(1, *m.log_real.shape[1:]))
+                    loss = bce(m.log_real[:length_pos], torch.ones_like(m.log_real[:length_pos]))
+                    loss += bce(m.log_real[length_pos:], torch.zeros_like(m.log_real[length_pos:]))
+                    loss /= 2
+                    discriminator_losses_by_layer[n] += [loss.item()]
+                    loss.backward()"""
 
-                # discriminator update
-                if optimize == 'discriminatorr':
                     loss, acc_real, acc_fake = discriminator_loss(m, length_pos)
 
                     discriminator_losses_by_layer[n] += [loss.item()]
@@ -175,9 +176,11 @@ def main_ood_detection(data_args, experiment_args, model_args):
                     fake_accs_by_layer[n] += [acc_fake]
 
                     loss.backward()
-                    discriminator_optim.step()
-                # phi update
-                elif optimize == 'phi':
+            discriminator_optim.step()
+        # phi update
+        elif optimize == 'phi':
+            for n, m in net.named_modules():
+                if type(m) == OODConv:
                     loss, acc_fake = phi_loss(m, length_pos)
 
                     phi_losses_by_layer[n] += [loss.item()]
@@ -186,9 +189,9 @@ def main_ood_detection(data_args, experiment_args, model_args):
                     fake_accs_by_layer[n] += [acc_fake]
 
                     loss.backward()
-                    phi_optim.step()
+            phi_optim.step()
 
-        #zero_grad()
+        zero_grad()
         pbar.update(1)
     pass
 
