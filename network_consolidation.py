@@ -1,3 +1,5 @@
+from os import mkdir
+from os.path import exists
 from tqdm.auto import tqdm
 import numpy as np
 import matplotlib.pyplot as plt
@@ -174,6 +176,12 @@ def consolidate_multi_task(data_args, train_args, model, device=0):
 
     base_dir = 'models/consolidation_experiments/%s/' % train_args.experiment_id
     base_path = base_dir + '%d-layer/' % len(train_args.layer)
+
+    if not exists(base_dir):
+        mkdir(base_dir)
+
+    if not exists(base_path):
+        mkdir(base_path)
 
     # covariance experimentation
     """from sklearn.covariance import EmpiricalCovariance
