@@ -101,7 +101,8 @@ def consolidate_multi_task(data_args, train_args, model, device=0):
             out_ch = conv.out_channels // train_args.redundant_groups * train_args.redundant_groups
             return SuperConv(in_ch, out_ch, conv.kernel_size, bias=conv.bias is not None,
                              stride=conv.stride, padding=conv.padding, dilation=conv.dilation,
-                             groups=conv.groups * train_args.redundant_groups, drop_groups=train_args.drop_groups)
+                             groups=conv.groups * train_args.redundant_groups, drop_groups=train_args.drop_groups,
+                             weight_sup=train_args.weight_sup_method == 'avg')
 
         for i, layer_name in enumerate(train_args.layer):
             old_conv = reinit_layers[i]
@@ -541,7 +542,10 @@ def collect_l2_weight(model, loader, method='mas', device=0):
 class SuperConv(nn.Conv2d):
 
     def __init__(self, in_channels, out_channels, kernel_size, bias=True,
-                 stride=1, padding=1, dilation=1, groups=1, normalize=False, drop_groups=False):
+                 stride=1, padding=1, dilation=1, groups=1,
+                 normalize=False, drop_groups=False, weight_sup=False):
+        self.weight_sup = weight_sup
+
         # set redundant_groups
         self.redundant_groups = groups > 1 and not drop_groups
         self.drop_groups = drop_groups
@@ -618,6 +622,9 @@ class SuperConv(nn.Conv2d):
             self.component = self.component.to(self.weight.device)
 
         # scale weight and component
+        if self.weight_sup:
+            sum_comp = self.weight + self.component * self.consolidated_weights * self.l2_weight
+            return sum_comp / (1 + self.consolidated_weights * self.l2_weight)
         return (self.weight + self.component * self.consolidated_weights) / (1 + self.consolidated_weights)
 
     def superimpose(self, mode=True):
@@ -883,6 +890,9 @@ class ConsolidateArgs(IncrTrainingArgs):
         'regularization':
             Argument('--regularization', type=str, default='none', choices=['none', 'l2', 'ewc', 'si', 'mas'],
                      help='choice of l2 regularization scheme for incremental training'),
+        'weight_sup_method':
+            Argument('--weight-sup-method', type=str, default='none', choices=['none', 'grad', 'avg'],
+                     help='how to apply regularization weighting to combine weight averaged loss with model loss'),
         'redundant_groups':
             Argument('--redundant-groups', type=int, default=1, help='number of redundant groups to use'),
         'drop_groups':
