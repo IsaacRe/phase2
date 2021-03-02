@@ -126,7 +126,7 @@ def consolidate_multi_task(data_args, train_args, model, device=0):
             reinit_layers[i] = l2_conv
 
     # disable affine and running stats of retrained bn layers
-    model.bn1 = nn.BatchNorm2d(model.bn1.num_features, affine=False).cuda()
+    """model.bn1 = nn.BatchNorm2d(model.bn1.num_features, affine=False).cuda()
     model.layer1[0].bn1 = nn.BatchNorm2d(model.layer1[0].bn1.num_features, affine=False).cuda()
     model.layer1[0].bn2 = nn.BatchNorm2d(model.layer1[0].bn2.num_features, affine=False).cuda()
     model.layer1[1].bn1 = nn.BatchNorm2d(model.layer1[1].bn1.num_features, affine=False).cuda()
@@ -140,7 +140,7 @@ def consolidate_multi_task(data_args, train_args, model, device=0):
     model.layer3[0].bn2 = nn.BatchNorm2d(model.layer3[0].bn2.num_features, affine=False).cuda()
     model.layer3[0].downsample[1] = nn.BatchNorm2d(model.layer3[0].downsample[1].num_features, affine=False).cuda()
     model.layer3[1].bn1 = nn.BatchNorm2d(model.layer3[1].bn1.num_features, affine=False).cuda()
-    model.layer3[1].bn2 = nn.BatchNorm2d(model.layer3[1].bn2.num_features, affine=False).cuda()
+    model.layer3[1].bn2 = nn.BatchNorm2d(model.layer3[1].bn2.num_features, affine=False).cuda()"""
     model.layer4[0].bn1 = nn.BatchNorm2d(model.layer4[0].bn1.num_features, affine=False).cuda()
     model.layer4[0].bn2 = nn.BatchNorm2d(model.layer4[0].bn2.num_features, affine=False).cuda()
     model.layer4[0].downsample[1] = nn.BatchNorm2d(model.layer4[0].downsample[1].num_features, affine=False).cuda()
@@ -525,7 +525,7 @@ def collect_l2_weight(model, loader, method='mas', device=0):
         if hasattr(m, 'l2_weight'):
             if type(m.l2_weight) != torch.Tensor:
                 m.l2_weight = 0
-            m.l2_weight = m.l2_weight + m.weight.grad / total
+            m.l2_weight = m.l2_weight + m.weight.grad.abs() / total
 
     model.zero_grad()
 
