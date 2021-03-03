@@ -82,6 +82,19 @@ def apply_module_method_if_exists(model, method_name):
     return model_apply_fn
 
 
+def train_layerwise(train_args, model, module_schedule, train_loader, val_loader, device=0):
+    train_modules = []
+    # modules passed in list will be added to optimization set in reverse order
+    for modules in module_schedule:
+        for m in modules:
+            if hasattr(m, 'update_component'):
+                m.update_component()
+        train_modules += list(modules)
+        train_args.epochs = len(train_modules)
+        train(train_args, model, train_loader, val_loader, device=device, optimize_modules=train_modules,
+              multihead=True)
+
+
 def consolidate_multi_task(data_args, train_args, model, device=0):
     train_loaders, val_loaders, test_loaders = get_dataloaders_incr(data_args, load_test=True)
     _, _, test_ldr = get_dataloaders(data_args, load_train=False)
@@ -224,11 +237,37 @@ def consolidate_multi_task(data_args, train_args, model, device=0):
             layer.reset_parameters()
         save_layer(base_path, suffix='-reinit.pth')
 
+    # module training schedule for backward training
+    module_schedule = [
+        (model.layer4[1].conv2,),
+        (model.layer4[1].conv1,),
+        (model.layer4[0].conv2, model.layer4[0].downsample[0]),
+        (model.layer4[0].conv1,),
+        (model.layer3[1].conv2,),
+        (model.layer3[1].conv1,),
+        (model.layer3[0].conv2, model.layer3[0].downsample[0]),
+        (model.layer3[0].conv1,),
+        (model.layer2[1].conv2,),
+        (model.layer2[1].conv1,),
+        (model.layer2[0].conv2, model.layer2[0].downsample[0]),
+        (model.layer2[0].conv1,),
+        (model.layer1[1].conv2,),
+        (model.layer1[1].conv1,),
+        (model.layer1[0].conv2,),
+        (model.layer1[0].conv1,),
+        (model.conv1,)
+    ]
+    module_schedule = [[m for m in modules if m in reinit_layers] for modules in module_schedule]
+    module_schedule = [modules for modules in module_schedule if len(modules) > 0]
+
     accuracies = []
     # train separately on each subtask
     for i, (train_loader, val_loader) in enumerate(zip(train_loaders, val_loaders)):
-        train(train_args, model, train_loader, val_loader, device=device, optimize_modules=reinit_layers,
-              multihead=True)
+        if train_args.train_backward and i > 0:
+            train_layerwise(train_args, model, module_schedule, train_loader, val_loader, device=device)
+        else:
+            train(train_args, model, train_loader, val_loader, device=device, optimize_modules=reinit_layers,
+                  multihead=True)
         if train_args.superimpose:
             model.superimpose(True)
         accs = []
@@ -251,7 +290,7 @@ def consolidate_multi_task(data_args, train_args, model, device=0):
             load_layer(base_path, suffix='-reinit.pth')
 
         # reset weight and component in SuperConv
-        if train_args.superimpose:
+        if train_args.superimpose and not train_args.train_backward:
             model.update_component()
 
         # update previous parameterization if conducting l2 penalty
@@ -921,6 +960,8 @@ class DropoutArgs(ConsolidateArgs):
             Argument('--suppress-func', type=str, default='normal',
                      choices=['normal', 'piecewise-exponential', 'relu', 'exp'],
                      help='specify the function to use for obtaining suppression weighting scheme'),
+        'train_backward':
+            Argument('--train-backward', action='store_true', help='conduct training layer-wise back-to-front')
     }
 
 
