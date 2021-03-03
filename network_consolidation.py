@@ -96,6 +96,8 @@ def train_layerwise(train_args, model, module_schedule, train_loader, val_loader
 
 
 def consolidate_multi_task(data_args, train_args, model, device=0):
+    if train_args.regularization != 'none':
+        train_args.l2 = True
     train_loaders, val_loaders, test_loaders = get_dataloaders_incr(data_args, load_test=True)
     _, _, test_ldr = get_dataloaders(data_args, load_train=False)
 
