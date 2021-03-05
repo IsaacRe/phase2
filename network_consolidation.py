@@ -121,6 +121,8 @@ def consolidate_multi_task(data_args, train_args, model, device=0):
 
         for i, layer_name in enumerate(train_args.layer):
             old_conv = reinit_layers[i]
+            if type(old_conv) != nn.Conv2d:
+                continue
             sup_conv = build_super_conv(old_conv)
             set_torchvision_network_module(model, layer_name, sup_conv)
             sup_conv.cuda()
@@ -138,13 +140,15 @@ def consolidate_multi_task(data_args, train_args, model, device=0):
 
         for i, layer_name in enumerate(train_args.layer):
             old_conv = reinit_layers[i]
+            if type(old_conv) != nn.Conv2d:
+                continue
             l2_conv = build_l2_conv(old_conv)
             set_torchvision_network_module(model, layer_name, l2_conv)
             l2_conv.cuda()
             reinit_layers[i] = l2_conv
 
     # disable affine and running stats of retrained bn layers
-    """model.bn1 = nn.BatchNorm2d(model.bn1.num_features, affine=False).cuda()
+    model.bn1 = nn.BatchNorm2d(model.bn1.num_features, affine=False).cuda()
     model.layer1[0].bn1 = nn.BatchNorm2d(model.layer1[0].bn1.num_features, affine=False).cuda()
     model.layer1[0].bn2 = nn.BatchNorm2d(model.layer1[0].bn2.num_features, affine=False).cuda()
     model.layer1[1].bn1 = nn.BatchNorm2d(model.layer1[1].bn1.num_features, affine=False).cuda()
@@ -158,7 +162,7 @@ def consolidate_multi_task(data_args, train_args, model, device=0):
     model.layer3[0].bn2 = nn.BatchNorm2d(model.layer3[0].bn2.num_features, affine=False).cuda()
     model.layer3[0].downsample[1] = nn.BatchNorm2d(model.layer3[0].downsample[1].num_features, affine=False).cuda()
     model.layer3[1].bn1 = nn.BatchNorm2d(model.layer3[1].bn1.num_features, affine=False).cuda()
-    model.layer3[1].bn2 = nn.BatchNorm2d(model.layer3[1].bn2.num_features, affine=False).cuda()"""
+    model.layer3[1].bn2 = nn.BatchNorm2d(model.layer3[1].bn2.num_features, affine=False).cuda()
     model.layer4[0].bn1 = nn.BatchNorm2d(model.layer4[0].bn1.num_features, affine=False).cuda()
     model.layer4[0].bn2 = nn.BatchNorm2d(model.layer4[0].bn2.num_features, affine=False).cuda()
     model.layer4[0].downsample[1] = nn.BatchNorm2d(model.layer4[0].downsample[1].num_features, affine=False).cuda()
@@ -234,9 +238,10 @@ def consolidate_multi_task(data_args, train_args, model, device=0):
     save_layer(base_path, suffix='-full.pth')
 
     # reinitialize the layer
-    if not train_args.superimpose:
-        for layer in reinit_layers:
+    for layer in reinit_layers:
+        if type(layer) not in [L2Conv, SuperConv]:
             layer.reset_parameters()
+    if not train_args.superimpose or train_args.l2:
         save_layer(base_path, suffix='-reinit.pth')
 
     # module training schedule for backward training
@@ -296,7 +301,7 @@ def consolidate_multi_task(data_args, train_args, model, device=0):
             model.update_component()
 
         # update previous parameterization if conducting l2 penalty
-        elif train_args.l2:
+        elif train_args.l2 and not train_args.superimpose:
             model.update_previous_params()
 
     # consolidate using kernel averaging
