@@ -296,6 +296,10 @@ def consolidate_multi_task(data_args, train_args, model, device=0):
             # reinitialize the layer
             load_layer(base_path, suffix='-reinit.pth')
 
+        # update regularization weighting scheme
+        if train_args.regularization not in ['none', 'l2']:
+            collect_l2_weight(model, train_loader, method=train_args.regularization, device=device)
+
         # reset weight and component in SuperConv
         if train_args.superimpose and not train_args.train_backward:
             model.update_component()
