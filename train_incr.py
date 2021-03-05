@@ -95,6 +95,10 @@ def train_incr(args: IncrTrainingArgs, model, train_loaders, val_loaders, device
         train(args, model, train_loader, *val_loaders[:i+1], device=device, multihead=args.multihead, fc_only=False, #i > 0
               optimize_modules=optimize_modules)
 
+        # load superimposed weight into memory to be saved
+        if args.superimpose:
+            model.load_superimposed_weight()
+
         # update regularization weighting scheme
         if args.regularization not in ['none', 'l2']:
             collect_l2_weight(model, train_loader, method=args.regularization, device=device)
