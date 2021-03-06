@@ -1,4 +1,5 @@
 import matplotlib.pyplot as plt
+import numpy as np
 from tqdm.auto import tqdm
 import torch
 import torch.nn as nn
@@ -13,6 +14,22 @@ class OODArgs(ExperimentArgs):
     ARGS = {
 
     }
+
+
+def shuffle_pixels(x, scale=1):
+    """
+    x: [batch X in channels X height X width]
+    """
+    _, _, height, width = x.shape
+    og_x_idx = np.arange(height).repeat(width)
+    og_y_idx = np.arange(width)[None].repeat(height, 0).reshape(-1)
+    x_idx = np.random.choice(height // scale, height // scale, replace=False).repeat(scale)
+    y_idx = np.random.choice(width // scale, width // scale, replace=False).repeat(scale)
+    x_idx = ((np.arange(height) - x_idx) % height).repeat(width)
+    y_idx = ((np.arange(width) - y_idx) % width)[None].repeat(height, 0).reshape(-1)
+    x = x.transpose(0, 2).transpose(1, 3)
+    x[og_x_idx, og_y_idx] = x[x_idx, y_idx]
+    return x.transpose(0, 2).transpose(1, 3)
 
 
 def main():
@@ -48,11 +65,11 @@ def main_ood_detection(data_args, experiment_args, model_args):
     net.layer3[0].bn2 = nn.BatchNorm2d(net.layer3[0].bn2.num_features, affine=False).cuda()
     net.layer3[0].downsample[1] = nn.BatchNorm2d(net.layer3[0].downsample[1].num_features, affine=False).cuda()
     net.layer3[1].bn1 = nn.BatchNorm2d(net.layer3[1].bn1.num_features, affine=False).cuda()
-    net.layer3[1].bn2 = nn.BatchNorm2d(net.layer3[1].bn2.num_features, affine=False).cuda()"""
+    net.layer3[1].bn2 = nn.BatchNorm2d(net.layer3[1].bn2.num_features, affine=False).cuda()
     net.layer4[0].bn1 = nn.BatchNorm2d(net.layer4[0].bn1.num_features, affine=False).cuda()
     net.layer4[0].bn2 = nn.BatchNorm2d(net.layer4[0].bn2.num_features, affine=False).cuda()
     net.layer4[0].downsample[1] = nn.BatchNorm2d(net.layer4[0].downsample[1].num_features, affine=False).cuda()
-    net.layer4[1].bn1 = nn.BatchNorm2d(net.layer4[1].bn1.num_features, affine=False).cuda()
+    net.layer4[1].bn1 = nn.BatchNorm2d(net.layer4[1].bn1.num_features, affine=False).cuda()"""
     net.layer4[1].bn2 = nn.BatchNorm2d(net.layer4[1].bn2.num_features, affine=False).cuda()
 
     def build_ood_conv(conv):
@@ -115,12 +132,12 @@ def main_ood_detection(data_args, experiment_args, model_args):
 
         loss_pos = bce(pos_logits, torch.ones_like(pos_logits))
         loss_neg = bce(neg_logits, torch.zeros_like(neg_logits))
-        #loss_pseudo_pos = bce(pseudo_pos_logits, torch.zeros_like(pseudo_pos_logits))
+        loss_pseudo_pos = bce(pseudo_pos_logits, torch.zeros_like(pseudo_pos_logits))
         #loss_all_neg = loss_neg + loss_pseudo_pos
 
         # weight positive and negative samples evenly
         #loss = (loss_pos * total_neg + loss_all_neg * total_pos) / 2 / total_neg / total_pos
-        loss = (loss_pos + loss_neg) / 2
+        loss = (loss_pos + loss_neg + loss_pseudo_pos) / 3
 
         pred_real = torch.sigmoid(m.log_real).round()
         acc_real = pred_real[:length_pos].sum().item() - (pred_real[length_pos:] - 1).sum().item()
@@ -131,88 +148,111 @@ def main_ood_detection(data_args, experiment_args, model_args):
 
         return loss, acc_real, acc_fake
 
-    def phi_loss(m, length_pos):
+    def phi_loss(m, length_pos, l2=0.1):
         # get discriminator outputs for perturbed (pseudo pos) inputs
-        pseudo_pos_logits = m.log_fake[length_pos:]
+        phi_pos_logits = m.log_fake[:length_pos]
+        phi_neg_logits = m.log_fake[length_pos:]
 
-        loss = bce(pseudo_pos_logits, torch.ones_like(pseudo_pos_logits))
+        loss = bce(phi_neg_logits, torch.ones_like(phi_neg_logits))
+        l2_loss = l2 * m.l2[:length_pos].mean()
 
-        pred = torch.sigmoid(pseudo_pos_logits).round()
+        pred = torch.sigmoid(phi_neg_logits).round()
         acc = -(pred - 1).sum().item() / pred.numel()
 
-        # TODO impose regularizations on transformed output
-        return loss, acc
+        return loss, l2_loss, acc
 
     discriminator_losses_by_layer = {n: [] for n in experiment_args.layer}
     phi_losses_by_layer = {n: [] for n in experiment_args.layer}
+    phi_l2_by_layer = {n: [] for n in experiment_args.layer}
     real_accs_by_layer = {n: [] for n in experiment_args.layer}
     fake_accs_by_layer = {n: [] for n in experiment_args.layer}
     optimize = 'discriminator'
-    pbar = tqdm(total=min(map(lambda x: len(x), train_loaders[:2])))
-    for (_, x0, y0), (_, x1, y1) in zip(*train_loaders[:2]):
-        x0, x1 = x0.to(0), x1.to(0)
-        length_pos = len(y0)
-        y = torch.zeros(len(y0) + len(y1)).to(0)
-        y[:length_pos] = 1
-        x = torch.cat([x0, x1], dim=0)
-        net(x)
+    l2_weight = 10
+    for epoch in range(10):
+        pbar = tqdm(total=min(map(lambda x: len(x), train_loaders[:2])))
+        for (_, x0, y0), (_, x1, y1) in zip(*train_loaders[:2]):
+            x0, x1 = x0.to(0), x1.to(0)
+            #x_shuffle = shuffle_pixels(x0, scale=7*1)  # we blow up images by 7 to begin with
+            length_pos = len(y0)
+            y = torch.zeros(len(y0) + len(y1)).to(0)
+            y[:length_pos] = 1
+            x = torch.cat([x0, x1], dim=0)
+            net(x)
 
-        # discriminator update
-        if optimize == 'discriminator':
-            for n, m in net.named_modules():
-                if type(m) == OODConv:
-                    """#loss = bce(m.log_real, y[:,None,None,None].repeat(1, *m.log_real.shape[1:]))
-                    loss = bce(m.log_real[:length_pos], torch.ones_like(m.log_real[:length_pos]))
-                    loss += bce(m.log_real[length_pos:], torch.zeros_like(m.log_real[length_pos:]))
-                    loss /= 2
-                    discriminator_losses_by_layer[n] += [loss.item()]
-                    loss.backward()"""
+            # discriminator update
+            if optimize == 'discriminator':
+                for n, m in net.named_modules():
+                    if type(m) == OODConv:
+                        """#loss = bce(m.log_real, y[:,None,None,None].repeat(1, *m.log_real.shape[1:]))
+                        loss = bce(m.log_real[:length_pos], torch.ones_like(m.log_real[:length_pos]))
+                        loss += bce(m.log_real[length_pos:], torch.zeros_like(m.log_real[length_pos:]))
+                        loss /= 2
+                        discriminator_losses_by_layer[n] += [loss.item()]
+                        loss.backward()"""
 
-                    loss, acc_real, acc_fake = discriminator_loss(m, length_pos)
+                        loss, acc_real, acc_fake = discriminator_loss(m, length_pos)
 
-                    discriminator_losses_by_layer[n] += [loss.item()]
+                        discriminator_losses_by_layer[n] += [loss.item()]
 
-                    real_accs_by_layer[n] += [acc_real]
-                    fake_accs_by_layer[n] += [acc_fake]
+                        real_accs_by_layer[n] += [acc_real]
+                        fake_accs_by_layer[n] += [acc_fake]
 
-                    loss.backward()
-            discriminator_optim.step()
-        # phi update
-        elif optimize == 'phi':
-            for n, m in net.named_modules():
-                if type(m) == OODConv:
-                    loss, acc_fake = phi_loss(m, length_pos)
+                        loss.backward()
+                discriminator_optim.step()
+            # phi update
+            elif optimize == 'phi':
+                for n, m in net.named_modules():
+                    if type(m) == OODConv:
+                        loss, l2_loss, acc_fake = phi_loss(m, length_pos, l2=l2_weight)
 
-                    phi_losses_by_layer[n] += [loss.item()]
+                        phi_losses_by_layer[n] += [loss.item()]
+                        phi_l2_by_layer[n] += [l2_loss.item()]
 
-                    real_accs_by_layer[n] += [real_accs_by_layer[n][-1]]
-                    fake_accs_by_layer[n] += [acc_fake]
+                        real_accs_by_layer[n] += [real_accs_by_layer[n][-1]]
+                        fake_accs_by_layer[n] += [acc_fake]
 
-                    loss.backward()
-            phi_optim.step()
+                        (loss + l2_loss).backward()
+                phi_optim.step()
 
-        zero_grad()
-        pbar.update(1)
+            zero_grad()
+            pbar.update(1)
+        pbar.close()
     pass
 
 
 
 
 class OODConv(nn.Conv2d):
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, hidden_dim=512, **kwargs):
         super(OODConv, self).__init__(*args, **kwargs)
         self.log_real = None  # logits for real samples
         self.log_fake = None  # logits for fake samples
         self.phi_out = None  # faked in-domain data
-        self.discriminator = nn.Conv2d(self.in_channels, 1, (1, 1), bias=True)
-        self.phi = nn.Conv2d(self.in_channels, self.in_channels, (1, 1), bias=True)
+        self.discriminator = MLP(self.in_channels, hidden_dim, 1) #nn.Conv2d(self.in_channels, 1, (1, 1), bias=True)
+        self.phi = MLP(self.in_channels, hidden_dim, self.in_channels)#nn.Conv2d(self.in_channels, self.in_channels, (1, 1), bias=True)
+        self.l2 = None
 
     def forward(self, input: torch.Tensor) -> torch.Tensor:
-        self.phi_out = self.phi(input.detach())
+        phi_out = self.phi(input.detach())
+        self.l2 = (phi_out - input)**2
         self.log_real = self.discriminator(input.detach())
-        self.log_fake = self.discriminator(self.phi_out)
+        self.log_fake = self.discriminator(phi_out)
 
         return super(OODConv, self).forward(input)
+
+
+class MLP(nn.Module):
+    def __init__(self, in_channels, hidden_dim, out_dim):
+        super(MLP, self).__init__()
+        self.conv1 = nn.Conv2d(in_channels, hidden_dim, 1, bias=True)
+        self.sigmoid = nn.Sigmoid()
+        self.conv2 = nn.Conv2d(hidden_dim, out_dim, 1, bias=True)
+
+    def forward(self, x):
+        out = self.conv1(x)
+        out = self.sigmoid(out)
+        return self.conv2(out)
+
 
 
 if __name__ == '__main__':
