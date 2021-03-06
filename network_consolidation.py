@@ -117,7 +117,7 @@ def consolidate_multi_task(data_args, train_args, model, device=0):
             return SuperConv(in_ch, out_ch, conv.kernel_size, bias=conv.bias is not None,
                              stride=conv.stride, padding=conv.padding, dilation=conv.dilation,
                              groups=conv.groups * train_args.redundant_groups, drop_groups=train_args.drop_groups,
-                             weight_sup=train_args.weight_sup_method == 'avg')
+                             bias_sup=train_args.weight_sup_method)
 
         for i, layer_name in enumerate(train_args.layer):
             old_conv = reinit_layers[i]
@@ -148,7 +148,7 @@ def consolidate_multi_task(data_args, train_args, model, device=0):
             reinit_layers[i] = l2_conv
 
     # disable affine and running stats of retrained bn layers
-    model.bn1 = nn.BatchNorm2d(model.bn1.num_features, affine=False).cuda()
+    """model.bn1 = nn.BatchNorm2d(model.bn1.num_features, affine=False).cuda()
     model.layer1[0].bn1 = nn.BatchNorm2d(model.layer1[0].bn1.num_features, affine=False).cuda()
     model.layer1[0].bn2 = nn.BatchNorm2d(model.layer1[0].bn2.num_features, affine=False).cuda()
     model.layer1[1].bn1 = nn.BatchNorm2d(model.layer1[1].bn1.num_features, affine=False).cuda()
@@ -162,7 +162,7 @@ def consolidate_multi_task(data_args, train_args, model, device=0):
     model.layer3[0].bn2 = nn.BatchNorm2d(model.layer3[0].bn2.num_features, affine=False).cuda()
     model.layer3[0].downsample[1] = nn.BatchNorm2d(model.layer3[0].downsample[1].num_features, affine=False).cuda()
     model.layer3[1].bn1 = nn.BatchNorm2d(model.layer3[1].bn1.num_features, affine=False).cuda()
-    model.layer3[1].bn2 = nn.BatchNorm2d(model.layer3[1].bn2.num_features, affine=False).cuda()
+    model.layer3[1].bn2 = nn.BatchNorm2d(model.layer3[1].bn2.num_features, affine=False).cuda()"""
     model.layer4[0].bn1 = nn.BatchNorm2d(model.layer4[0].bn1.num_features, affine=False).cuda()
     model.layer4[0].bn2 = nn.BatchNorm2d(model.layer4[0].bn2.num_features, affine=False).cuda()
     model.layer4[0].downsample[1] = nn.BatchNorm2d(model.layer4[0].downsample[1].num_features, affine=False).cuda()
@@ -593,8 +593,9 @@ class SuperConv(nn.Conv2d):
 
     def __init__(self, in_channels, out_channels, kernel_size, bias=True,
                  stride=1, padding=1, dilation=1, groups=1,
-                 normalize=False, drop_groups=False, weight_sup=False):
-        self.weight_sup = weight_sup
+                 normalize=False, drop_groups=False, bias_sup='none', t_ratio=0.5):
+        self.bias_sup = bias_sup
+        self.t_ratio = t_ratio
 
         # set redundant_groups
         self.redundant_groups = groups > 1 and not drop_groups
@@ -672,10 +673,18 @@ class SuperConv(nn.Conv2d):
             self.component = self.component.to(self.weight.device)
 
         # scale weight and component
-        if self.weight_sup:
+        if self.bias_sup == 'avg':
             sum_comp = self.weight + self.component * self.consolidated_weights * self.l2_weight
             return sum_comp / (1 + self.consolidated_weights * self.l2_weight)
-        return (self.weight + self.component * self.consolidated_weights) / (1 + self.consolidated_weights)
+        sup_comp = (self.weight + self.component * self.consolidated_weights) / (1 + self.consolidated_weights)
+        if self.bias_sup == 'threshold':
+            masked_sum_comp = torch.zeros_like(self.weight)
+            t = np.quantile(self.l2_weight, (1 - self.t_ratio))
+            mask = self.l2_weight > t
+            masked_sum_comp[mask] += sup_comp[mask]
+            masked_sum_comp[~mask] += self.weight[~mask]
+            return masked_sum_comp
+        return sup_comp
 
     def superimpose(self, mode=True):
         self.superimposing = mode
@@ -941,7 +950,7 @@ class ConsolidateArgs(IncrTrainingArgs):
             Argument('--regularization', type=str, default='none', choices=['none', 'l2', 'ewc', 'si', 'mas'],
                      help='choice of l2 regularization scheme for incremental training'),
         'weight_sup_method':
-            Argument('--weight-sup-method', type=str, default='none', choices=['none', 'grad', 'avg'],
+            Argument('--weight-sup-method', type=str, default='none', choices=[None, 'avg', 'threshold'],
                      help='how to apply regularization weighting to combine weight averaged loss with model loss'),
         'redundant_groups':
             Argument('--redundant-groups', type=int, default=1, help='number of redundant groups to use'),
