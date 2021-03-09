@@ -297,7 +297,7 @@ def consolidate_multi_task(data_args, train_args, model, device=0):
             load_layer(base_path, suffix='-reinit.pth')
 
         # update regularization weighting scheme
-        if train_args.regularization not in ['none', 'l2']:
+        if train_args.regularization not in ['none', 'l2'] or train_args.weight_sup_method is not None:
             collect_l2_weight(model, train_loader, method=train_args.regularization, device=device)
 
         # reset weight and component in SuperConv
@@ -678,12 +678,16 @@ class SuperConv(nn.Conv2d):
             return sum_comp / (1 + self.consolidated_weights * self.l2_weight)
         sup_comp = (self.weight + self.component * self.consolidated_weights) / (1 + self.consolidated_weights)
         if self.bias_sup == 'threshold':
-            masked_sum_comp = torch.zeros_like(self.weight)
-            t = np.quantile(self.l2_weight, (1 - self.t_ratio))
-            mask = self.l2_weight > t
-            masked_sum_comp[mask] += sup_comp[mask]
-            masked_sum_comp[~mask] += self.weight[~mask]
-            return masked_sum_comp
+            if type(self.l2_weight) == torch.Tensor:
+                masked_sum_comp1 = torch.zeros_like(self.weight)
+                masked_sum_comp2 = torch.zeros_like(self.weight)
+                t = np.quantile(self.l2_weight.cpu(), (1 - self.t_ratio))
+                mask = self.l2_weight > t
+                masked_sum_comp1[mask] = sup_comp[mask]
+                masked_sum_comp2[~mask] = self.weight[~mask]
+                return masked_sum_comp1 + masked_sum_comp2
+            else:
+                return self.weight
         return sup_comp
 
     def superimpose(self, mode=True):
