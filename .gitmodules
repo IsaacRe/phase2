@@ -10,3 +10,6 @@
 [submodule "experiment_utils"]
 	path = experiment_utils
 	url = https://github.com/IsaacRe/experiment_utils.git
+[submodule "PyTorch-BYOL"]
+	path = PyTorch-BYOL
+	url = https://github.com/sthalles/PyTorch-BYOL.git
